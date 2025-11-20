@@ -7,7 +7,8 @@ type AssembleResult = {
   map?: Record<number, number>; // source line (1-based) -> address
   errors?: string[];
   warnings?: string[];
-  labels?: Record<string, { addr: number; line: number }>;
+  labels?: Record<string, { addr: number; line: number; src?: string }>;
+  origins?: Array<{ file?: string; line: number }>;
 };
 
 const regCodes: Record<string, number> = {
@@ -46,7 +47,7 @@ function parseNumberFull(v: string): number | null {
   return null;
 }
 
-function parseAddressToken(v: string, labels?: Map<string, { addr: number; line: number }>): number | null {
+function parseAddressToken(v: string, labels?: Map<string, { addr: number; line: number; src?: string }>): number | null {
   if (/^0x[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(2), 16) & 0xffff;
   if (/^\$[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(1), 16) & 0xffff;
   if (/^[0-9]+$/.test(v)) return parseInt(v, 10) & 0xffff;
@@ -54,12 +55,59 @@ function parseAddressToken(v: string, labels?: Map<string, { addr: number; line:
   return null;
 }
 
-export function assemble(source: string): AssembleResult {
-  const lines = source.split(/\r?\n/);
-  const labels = new Map<string, { addr: number; line: number }>();
+export function assemble(source: string, sourcePath?: string): AssembleResult {
+  // Expand .include directives and build an origin map so we can report
+  // errors/warnings that reference the original file and line number.
+  function processContent(content: string, file?: string, depth = 0): { lines: string[]; origins: Array<{ file?: string; line: number }> } {
+    if (depth > 16) throw new Error(`Include recursion too deep (>${16}) when processing ${file || '<memory>'}`);
+    const outLines: string[] = [];
+    const origins: Array<{ file?: string; line: number }> = [];
+    const srcLines = content.split(/\r?\n/);
+    for (let li = 0; li < srcLines.length; li++) {
+      const raw = srcLines[li];
+      const trimmed = raw.replace(/;.*$/, '').trim();
+      // match .include "filename" or .include 'filename'
+      const m = trimmed.match(/^\.include\s+["']([^"']+)["']/i);
+      if (m) {
+        const inc = m[1];
+        // resolve path
+        let incPath = inc;
+        if (!path.isAbsolute(incPath)) {
+          const baseDir = file ? path.dirname(file) : (sourcePath ? path.dirname(sourcePath) : process.cwd());
+          incPath = path.resolve(baseDir, incPath);
+        }
+        let incText: string;
+        try {
+          incText = fs.readFileSync(incPath, 'utf8');
+        } catch (err) {
+          const em = err && (err as any).message ? (err as any).message : String(err);
+          throw new Error(`Failed to include '${inc}' at ${file || sourcePath || '<memory>'}:${li+1} - ${em}`);
+        }
+        const nested = processContent(incText, incPath, depth + 1);
+        for (let k = 0; k < nested.lines.length; k++) {
+          outLines.push(nested.lines[k]);
+          origins.push(nested.origins[k]);
+        }
+        continue;
+      }
+      outLines.push(raw);
+      origins.push({ file: file || sourcePath, line: li + 1 });
+    }
+    return { lines: outLines, origins };
+  }
+
+  let expanded: { lines: string[]; origins: Array<{ file?: string; line: number }> };
+  try {
+    expanded = processContent(source, sourcePath, 0);
+  } catch (err: any) {
+    return { success: false, errors: [err.message] };
+  }
+  const lines = expanded.lines;
+  const labels = new Map<string, { addr: number; line: number; src?: string }>();
   let addr = 0;
   const errors: string[] = [];
   const warnings: string[] = [];
+  const origins = expanded.origins;
 
   // First pass: labels and address calculation
   for (let i = 0; i < lines.length; i++) {
@@ -74,7 +122,8 @@ export function assemble(source: string): AssembleResult {
       tokens.shift();
       if (!tokens.length) {
         if (labels.has(labelHere)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
-        labels.set(labelHere, { addr, line: i + 1 });
+        const org = origins[i];
+        labels.set(labelHere, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
         continue;
       }
     } else if (tokens.length >= 2 && /^\.?org$/i.test(tokens[1])) {
@@ -111,7 +160,8 @@ export function assemble(source: string): AssembleResult {
       addr = val;
       if (labelHere) {
         if (labels.has(labelHere)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
-        labels.set(labelHere, { addr, line: i + 1 });
+        const org = origins[i];
+        labels.set(labelHere, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
       }
       continue;
     }
@@ -202,7 +252,7 @@ export function assemble(source: string): AssembleResult {
     errors.push(`Unknown or unsupported opcode '${op}' at line ${i + 1}`);
   }
 
-  if (errors.length) return { success: false, errors };
+  if (errors.length) return { success: false, errors, origins };
 
   // Second pass: generate bytes and source-line map
   addr = 0;
@@ -612,18 +662,18 @@ export function assemble(source: string): AssembleResult {
     errors.push(`Unhandled opcode '${op}' at ${srcLine}`);
   }
 
-  if (errors.length) return { success: false, errors };
+  if (errors.length) return { success: false, errors, origins };
 
   // convert labels map to plain object for return
-  const labelsOut: Record<string, { addr: number; line: number }> = {};
-  for (const [k, v] of labels) labelsOut[k] = { addr: v.addr, line: v.line };
+  const labelsOut: Record<string, { addr: number; line: number; src?: string }> = {};
+  for (const [k, v] of labels) labelsOut[k] = { addr: v.addr, line: v.line, src: v.src };
 
-  return { success: true, output: Buffer.from(out), map, labels: labelsOut, warnings };
+  return { success: true, output: Buffer.from(out), map, labels: labelsOut, warnings, origins };
 }
 
 // convenience when using from extension
 export function assembleAndWrite(source: string, outPath: string, sourcePath?: string): { success: boolean; path?: string; errors?: string[] } {
-  const res = assemble(source);
+  const res = assemble(source, sourcePath);
   if (!res.success || !res.output) {
     // Improve error messages: include the source line, filename, line number,
     // and file URI / vscode URI so editors/terminals can link to the location.
@@ -634,14 +684,33 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
         // Try to extract a trailing `at <line>` marker from the assembler error
         const m = e.match(/at\s+(\d+)\b/);
         const lineNo = m ? parseInt(m[1], 10) : undefined;
-        const srcText = (lineNo && srcLines[lineNo - 1]) ? srcLines[lineNo - 1].replace(/\t/g, '    ').trim() : '';
-        let msg = '';
-        if (sourcePath && lineNo) {
-          const abs = path.resolve(sourcePath);
-          const fileUri = 'file:///' + abs.replace(/\\/g, '/');
-          msg = `${abs}:${lineNo}: ${e}\n> ${srcText}\n${fileUri}:${lineNo}`;
+        // Determine origin (file + original line) if available from assemble()
+        const origin = (res.origins && lineNo) ? res.origins[lineNo - 1] : undefined;
+        let srcText = '';
+        let displayPath: string | undefined;
+        let displayLine = lineNo;
+        if (origin && origin.file) {
+          displayPath = path.resolve(origin.file);
+          displayLine = origin.line;
+          try {
+            const fileLines = fs.readFileSync(origin.file, 'utf8').split(/\r?\n/);
+            if (fileLines[displayLine - 1]) srcText = fileLines[displayLine - 1].replace(/\t/g, '    ').trim();
+          } catch (err) {
+            srcText = '';
+          }
         } else if (lineNo) {
-          msg = `line ${lineNo}: ${e}\n> ${srcText}`;
+          displayPath = sourcePath ? path.resolve(sourcePath) : undefined;
+          srcText = srcLines[lineNo - 1] ? srcLines[lineNo - 1].replace(/\t/g, '    ').trim() : '';
+        }
+        let msg = '';
+        if (displayPath && displayLine) {
+          const fileUri = 'file:///' + displayPath.replace(/\\/g, '/');
+          // replace any "at <expandedLine>" in the assembler message with the original source line
+          const cleaned = typeof e === 'string' ? e.replace(/at\s+\d+\b/, `at ${displayLine}`) : e;
+          msg = `${displayPath}:${displayLine}: ${cleaned}\n> ${srcText}\n${fileUri}:${displayLine}`;
+        } else if (displayLine) {
+          const cleaned = typeof e === 'string' ? e.replace(/at\s+\d+\b/, `at ${displayLine}`) : e;
+          msg = `line ${displayLine}: ${cleaned}\n> ${srcText}`;
         } else {
           msg = e;
         }
@@ -656,18 +725,33 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
 
   // Print warnings (non-fatal) in a similar formatted style so they are visible
   if (res.warnings && res.warnings.length) {
-    const srcLines = source.split(/\r?\n/);
     for (const w of res.warnings) {
       const m = w.match(/at\s+(\d+)\b/);
       const lineNo = m ? parseInt(m[1], 10) : undefined;
-      const srcText = (lineNo && srcLines[lineNo - 1]) ? srcLines[lineNo - 1].replace(/\t/g, '    ').trim() : '';
-      if (sourcePath && lineNo) {
-        const abs = path.resolve(sourcePath);
-        const fileUri = 'file:///' + abs.replace(/\\/g, '/');
-        console.warn(`${abs}:${lineNo}: ${w}\n> ${srcText}\n${fileUri}:${lineNo}`);
-        console.warn('');
+      const origin = (res.origins && lineNo) ? res.origins[lineNo - 1] : undefined;
+      let srcText = '';
+      let displayPath: string | undefined;
+      let displayLine = lineNo;
+      if (origin && origin.file) {
+        displayPath = path.resolve(origin.file);
+        displayLine = origin.line;
+        try {
+          const fileLines = fs.readFileSync(origin.file, 'utf8').split(/\r?\n/);
+          if (fileLines[displayLine - 1]) srcText = fileLines[displayLine - 1].replace(/\t/g, '    ').trim();
+        } catch (err) {}
       } else if (lineNo) {
-        console.warn(`line ${lineNo}: ${w}\n> ${srcText}`);
+        displayPath = sourcePath ? path.resolve(sourcePath) : undefined;
+        const srcLines = source.split(/\r?\n/);
+        srcText = srcLines[lineNo - 1] ? srcLines[lineNo - 1].replace(/\t/g, '    ').trim() : '';
+      }
+      if (displayPath && displayLine) {
+        const fileUri = 'file:///' + displayPath.replace(/\\/g, '/');
+        const cleaned = typeof w === 'string' ? w.replace(/at\s+\d+\b/, `at ${displayLine}`) : w;
+        console.warn(`${displayPath}:${displayLine}: ${cleaned}\n> ${srcText}\n${fileUri}:${displayLine}`);
+        console.warn('');
+      } else if (displayLine) {
+        const cleaned = typeof w === 'string' ? w.replace(/at\s+\d+\b/, `at ${displayLine}`) : w;
+        console.warn(`line ${displayLine}: ${cleaned}\n> ${srcText}`);
         console.warn('');
       } else {
         console.warn(w);
@@ -688,7 +772,7 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
       for (const [name, info] of Object.entries(res.labels)) {
         tokens.labels[name] = {
           addr: '0x' + info.addr.toString(16).toUpperCase().padStart(4, '0'),
-          src: sourcePath ? path.basename(sourcePath) : undefined,
+          src: info.src || (sourcePath ? path.basename(sourcePath) : undefined),
           line: info.line
         };
       }
