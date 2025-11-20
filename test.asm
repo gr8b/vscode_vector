@@ -4,6 +4,7 @@ DI
 HLT
 
 ; label examples
+			lxi h, @sub1
 LABEL_ONE: CALL @sub1
 @sub1: CALL i8080_set_test_end
 
