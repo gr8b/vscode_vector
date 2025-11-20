@@ -55,6 +55,14 @@ function parseAddressToken(v: string, labels?: Map<string, { addr: number; line:
   return null;
 }
 
+function resolveLocalLabelKey(name: string, originFile?: string, sourcePath?: string): string {
+  if (!name || name[0] !== '@') return name;
+  // strip leading @ and append '_' + basename without extension of the file
+  const baseFile = originFile || sourcePath;
+  const base = baseFile ? path.basename(baseFile, path.extname(baseFile)) : 'memory';
+  return '@' + name.slice(1) + '_' + base;
+}
+
 export function assemble(source: string, sourcePath?: string): AssembleResult {
   // Expand .include directives and build an origin map so we can report
   // errors/warnings that reference the original file and line number.
@@ -120,10 +128,15 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     if (tokens[0].endsWith(':')) {
       labelHere = tokens[0].slice(0, -1);
       tokens.shift();
+      const org = origins[i];
+      const key = resolveLocalLabelKey(labelHere, org && org.file ? org.file : undefined, sourcePath);
+      if (labels.has(key)) {
+        const prev = labels.get(key)!;
+        errors.push(`Duplicate label '${labelHere}' at ${i + 1} (previously at ${prev.line})`);
+      } else {
+        labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
+      }
       if (!tokens.length) {
-        if (labels.has(labelHere)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
-        const org = origins[i];
-        labels.set(labelHere, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
         continue;
       }
     } else if (tokens.length >= 2 && /^\.?org$/i.test(tokens[1])) {
@@ -155,13 +168,16 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       // .org addr
       const rest = tokens.slice(1).join(' ');
       const aTok = rest.trim().split(/\s+/)[0];
-      const val = parseAddressToken(aTok, labels);
+      const org = origins[i];
+      const resolvedTok = resolveLocalLabelKey(aTok, org && org.file ? org.file : undefined, sourcePath);
+      const val = parseAddressToken(resolvedTok, labels);
       if (val === null) { errors.push(`Bad ORG address '${aTok}' at ${i + 1}`); continue; }
       addr = val;
       if (labelHere) {
-        if (labels.has(labelHere)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
         const org = origins[i];
-        labels.set(labelHere, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
+        const key = resolveLocalLabelKey(labelHere, org && org.file ? org.file : undefined, sourcePath);
+        if (labels.has(key)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
+        labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
       }
       continue;
     }
@@ -352,11 +368,14 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (num !== null) {
         target = num;
         if (target > 0xffff) warnings.push(`Address ${arg} (0x${target.toString(16).toUpperCase()}) too large for ${op} at ${srcLine}; truncating to 16-bit`);
-      } else if (labels.has(arg)) {
-        target = labels.get(arg)!.addr;
       } else {
-        errors.push(`Unknown label or address '${arg}' at ${srcLine}`);
-        target = 0;
+        const resolved = resolveLocalLabelKey(arg, origins[i] && origins[i].file ? origins[i].file : undefined, sourcePath);
+        if (labels.has(resolved)) {
+          target = labels.get(resolved)!.addr;
+        } else {
+          errors.push(`Unknown label or address '${arg}' at ${srcLine}`);
+          target = 0;
+        }
       }
       const opcode = op === 'LHLD' ? 0x2A : 0x22;
       out.push(opcode & 0xff);
@@ -412,11 +431,14 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (num !== null) {
         target = num;
         if (target > 0xffff) warnings.push(`Address ${arg} (0x${target.toString(16).toUpperCase()}) too large for ${op} at ${srcLine}; truncating to 16-bit`);
-      } else if (labels.has(arg)) {
-        target = labels.get(arg)!.addr;
       } else {
-        errors.push(`Unknown label or address '${arg}' at ${srcLine}`);
-        target = 0;
+        const resolved = resolveLocalLabelKey(arg, origins[i] && origins[i].file ? origins[i].file : undefined, sourcePath);
+        if (labels.has(resolved)) {
+          target = labels.get(resolved)!.addr;
+        } else {
+          errors.push(`Unknown label or address '${arg}' at ${srcLine}`);
+          target = 0;
+        }
       }
       let opcode = 0;
       if (op === 'LDA') opcode = 0x3A;
@@ -451,8 +473,11 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (num !== null) {
         target = num;
         if (target > 0xffff) warnings.push(`Immediate ${val} (0x${target.toString(16).toUpperCase()}) too large for LXI at ${srcLine}; truncating to 16-bit`);
-      } else if (labels.has(val)) target = labels.get(val)!.addr;
-      else { errors.push(`Bad LXI value '${val}' at ${srcLine}`); target = 0; }
+      } else {
+        const resolved = resolveLocalLabelKey(val, origins[i] && origins[i].file ? origins[i].file : undefined, sourcePath);
+        if (labels.has(resolved)) target = labels.get(resolved)!.addr;
+        else { errors.push(`Bad LXI value '${val}' at ${srcLine}`); target = 0; }
+      }
       out.push(opcode & 0xff);
       out.push(target & 0xff);
       out.push((target >> 8) & 0xff);
@@ -630,8 +655,11 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (num !== null) {
         target = num;
         if (target > 0xffff) warnings.push(`Address ${arg} (0x${target.toString(16).toUpperCase()}) too large for ${op} at ${srcLine}; truncating to 16-bit`);
-      } else if (labels.has(arg)) target = labels.get(arg)!.addr;
-      else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
+      } else {
+        const resolved = resolveLocalLabelKey(arg, origins[i] && origins[i].file ? origins[i].file : undefined, sourcePath);
+        if (labels.has(resolved)) target = labels.get(resolved)!.addr;
+        else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
+      }
       out.push(jmpMap[op]); out.push(target & 0xff); out.push((target >> 8) & 0xff); addr += 3; continue;
     }
 
@@ -642,8 +670,11 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (num !== null) {
         target = num;
         if (target > 0xffff) warnings.push(`Address ${arg} (0x${target.toString(16).toUpperCase()}) too large for ${op} at ${srcLine}; truncating to 16-bit`);
-      } else if (labels.has(arg)) target = labels.get(arg)!.addr;
-      else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
+      } else {
+        const resolved = resolveLocalLabelKey(arg, origins[i] && origins[i].file ? origins[i].file : undefined, sourcePath);
+        if (labels.has(resolved)) target = labels.get(resolved)!.addr;
+        else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
+      }
       out.push(callMap[op]); out.push(target & 0xff); out.push((target >> 8) & 0xff); addr += 3; continue;
     }
 
