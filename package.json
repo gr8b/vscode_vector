@@ -1,0 +1,54 @@
+{
+  "name": "vscode-i8080",
+  "displayName": "Intel 8080 Asm + Debugger",
+  "description": "Minimal VS Code extension: assemble i8080 asm and run a simple debug session.",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.70.0"
+  },
+  "main": "./out/extension.js",
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "prepublish": "npm run compile"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "@types/node": "^18.15.11",
+    "@types/vscode": "^1.70.0"
+  },
+  "dependencies": {
+    "vscode-debugadapter": "^1.47.0"
+  },
+  "activationEvents": [
+    "onCommand:i8080.compile",
+    "onDebug"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "i8080.compile",
+        "title": "Compile i8080 Assembly"
+      }
+    ],
+    "debuggers": [
+      {
+        "type": "i8080",
+        "label": "Intel 8080 Debugger",
+        "program": "./out/debugAdapter.js",
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to .asm (source) or .bin (binary) to run"
+              }
+            }
+          }
+        },
+        "languages": ["asm"]
+      }
+    ]
+  }
+}

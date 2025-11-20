@@ -1,0 +1,138 @@
+import { DebugSession, InitializedEvent, StoppedEvent, TerminatedEvent, Thread, StackFrame, Scope, Source, Handles, Variable } from 'vscode-debugadapter';
+import * as fs from 'fs';
+import { Emulator } from './emulator';
+import { assemble } from './assembler';
+
+class I8080DebugSession extends DebugSession {
+  private emulator: Emulator | null = null;
+  private sourceMap: Record<number, number> = {};
+  private breakpoints = new Set<number>();
+
+  public constructor() {
+    super();
+  }
+
+  protected initializeRequest(response: any, args: any): void {
+    response.body = response.body || {};
+    response.body.supportsConfigurationDoneRequest = true;
+    response.body.supportsEvaluateForHovers = true;
+    this.sendResponse(response);
+    this.sendEvent(new InitializedEvent());
+  }
+
+  protected launchRequest(response: any, args: any): void {
+    const program = args.program;
+    if (!program) {
+      this.sendErrorResponse(response, 1, 'No program provided');
+      return;
+    }
+
+    let bin: Buffer | null = null;
+    if (program.endsWith('.asm')) {
+      const src = fs.readFileSync(program, 'utf8');
+      const res = assemble(src);
+      if (!res.success || !res.output) { this.sendErrorResponse(response, 2, 'Assemble failed'); return; }
+      bin = res.output;
+      this.sourceMap = res.map || {};
+    } else {
+      bin = fs.readFileSync(program);
+      this.sourceMap = {};
+    }
+
+    this.emulator = new Emulator();
+    this.emulator.load(bin, 0);
+
+    this.sendResponse(response);
+  }
+
+  protected setBreakPointsRequest(response: any, args: any): void {
+    this.breakpoints.clear();
+    const src = args.source.path || '';
+    const clientBPs = args.breakpoints || [];
+    for (const bp of clientBPs) {
+      // map source line to address if possible
+      const line = bp.line;
+      const addr = this.sourceMap[line] ?? -1;
+      if (addr >= 0) this.breakpoints.add(addr);
+    }
+
+    // ack
+    response.body = { breakpoints: clientBPs.map((b: any) => ({ verified: true, line: b.line })) };
+    this.sendResponse(response);
+  }
+
+  protected threadsRequest(response: any): void {
+    // single thread
+    response.body = { threads: [ new Thread(1, 'i8080') ] };
+    this.sendResponse(response);
+  }
+
+  protected stackTraceRequest(response: any, args: any): void {
+    const frames: StackFrame[] = [];
+    if (this.emulator) {
+      const pc = this.emulator.regs.PC;
+      const srcLine = Object.keys(this.sourceMap).find(k => this.sourceMap[parseInt(k)] === pc);
+      const lineNum = srcLine ? parseInt(srcLine) : 1;
+      frames.push(new StackFrame(1, 'main', new Source('program', args && args.source ? args.source.path : undefined), lineNum, 0));
+    }
+    response.body = { stackFrames: frames, totalFrames: frames.length };
+    this.sendResponse(response);
+  }
+
+  protected scopesRequest(response: any, args: any): void {
+    const scopes = [ new Scope('Registers', this.createVariableHandle('regs'), false) ];
+    response.body = { scopes };
+    this.sendResponse(response);
+  }
+
+  private handleId = 1;
+  private handleMap = new Map<any, number>();
+  private reverseHandle = new Map<number, any>();
+
+  private createVariableHandle(obj: any) {
+    const id = this.handleId++;
+    this.handleMap.set(obj, id);
+    this.reverseHandle.set(id, obj);
+    return id;
+  }
+
+  protected variablesRequest(response: any, args: any): void {
+    const variables: any[] = [];
+    const handle = args.variablesReference;
+    const obj = this.reverseHandle.get(handle);
+    if (obj === 'regs' || obj === 'regsHandle' || obj === undefined) {
+      if (!this.emulator) { response.body = { variables }; this.sendResponse(response); return; }
+      const r = this.emulator.regs;
+      const regs: Array<[string, number]> = [['A', r.A], ['B', r.B], ['C', r.C], ['D', r.D], ['E', r.E], ['H', r.H], ['L', r.L], ['PC', r.PC], ['SP', r.SP]];
+      for (const [k, v] of regs) {
+        variables.push({ name: k, value: v.toString(), variablesReference: 0 });
+      }
+      variables.push({ name: 'Z', value: (r.flags.Z ? '1' : '0'), variablesReference: 0 });
+    }
+    response.body = { variables };
+    this.sendResponse(response);
+  }
+
+  protected continueRequest(response: any, args: any): void {
+    if (!this.emulator) { this.sendResponse(response); return; }
+    for (const b of this.breakpoints) this.emulator.breakpoints.add(b);
+    const res = this.emulator.runUntilBreakpointOrHalt();
+    if (res.stoppedOnBreakpoint) this.sendEvent(new StoppedEvent('breakpoint', 1));
+    else if (res.halted) this.sendEvent(new StoppedEvent('exception', 1));
+    this.sendResponse(response);
+  }
+
+  protected nextRequest(response: any, args: any): void {
+    if (!this.emulator) { this.sendResponse(response); return; }
+    const res = this.emulator.step();
+    if (res.halted) this.sendEvent(new TerminatedEvent());
+    else this.sendEvent(new StoppedEvent('step', 1));
+    this.sendResponse(response);
+  }
+
+  protected disconnectRequest(response: any, args: any): void {
+    this.sendResponse(response);
+  }
+}
+
+DebugSession.run(I8080DebugSession);

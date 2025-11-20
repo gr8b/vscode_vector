@@ -1,0 +1,30 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript build output
+out/
+*.tsbuildinfo
+
+# VS Code workspace settings
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Generated ROM/binaries
+test.rom
+*.rom
+
+# Optional coverage
+coverage/
+
+# Temporary
+.tmp/

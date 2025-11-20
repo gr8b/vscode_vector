@@ -1,0 +1,24 @@
+{
+    "breakpoints": [
+        {
+            "addr": "0x0100",
+            "autoDel": false,
+            "comment": "",
+            "cond": "=ANY",
+            "memPages": 4294967295,
+            "operand": "A",
+            "status": 1,
+            "value": "0x00"
+        }
+    ],
+    "codePerfs": null,
+    "comments": null,
+    "consts": null,
+    "labels": {
+        "LABEL_ONE": "0x010F",
+        "sub": "0x0110"
+    },
+    "memoryEdits": null,
+    "scripts": null,
+    "watchpoints": null
+}
