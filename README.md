@@ -1,10 +1,11 @@
 # Intel 8080 Assembler + Debugger (Minimal)
 
-This is a minimal VS Code extension that provides:
+This repository contains a small two-pass Intel 8080 assembler, a tiny emulator for testing, and a debug adapter intended for experimentation.
 
-- A tiny two-pass assembler for a subset of the Intel 8080 instruction set.
-- A very small 8080 emulator.
-- A debug adapter exposing basic features: breakpoints, continue, step, view registers.
+What’s included
+
+- A two-pass TypeScript assembler that emits a ROM (`.rom`) and a tokens file (`.json`) containing labels and origins.
+- A small emulator/debugger used for development and testing.
 
 Quick start
 
@@ -14,80 +15,69 @@ Quick start
 npm install
 ```
 
-2. Build the extension (produces `out/`):
+2. Build the tools (produces `out/`):
 
 ```pwsh
 npm run compile
 ```
 
-3. Open this folder in VS Code and press F5 to run the Extension Development Host.
+3. Assemble and run the included test ROM (see below).
 
-4. In the Extension Host open an `.asm` source file and run the command `Compile i8080 Assembly` (or use a debug configuration of type `i8080`).
+How to assemble and run
+-----------------------
 
-Notes
+- Compile TypeScript:
 
-- This project implements a minimal subset of instructions (labels, DB, MVI, MOV, LDA, STA, JMP, JZ, JNZ, HLT, NOP). The assembler will emit a `.bin` next to the source file.
-- The debugger is intentionally small and meant for experimentation/demo purposes.
+```pwsh
+npm run compile
+```
 
-Sample test launch
+- Assemble `test.asm` into `test.rom` (and write a token file `test.json` with labels):
 
-You can run the included `test.asm` automatically using the sample launch configuration in `.vscode/test.launch.json`.
+```pwsh
+node .\scripts\run-assembler.js
+```
 
-- Open `test.asm` in the Extension Development Host (or your workspace).
-- Start the configuration named `Run test.asm (i8080)` from the Run and Debug view or use the command palette to select it. It will assemble `test.asm` (if needed) and launch the `i8080` debug adapter.
+- Run the external emulator (example path shown for convenience):
 
-If you prefer to include the configuration in your workspace `launch.json`, copy the contents of `.vscode/test.launch.json` into `.vscode/launch.json`.
+```pwsh
+C:\Work\Programming\devector\bin\devector.exe .\test.rom
+```
 
+Features and notes
+------------------
 
-How to assemble, update labels and run the emulator
----------------------------------------------------
+- `.org` directive: supported (decimal, `0x..`, or `$..`). Example: `.org 0x100`.
 
-- **Compile the TypeScript (build the extension / tools)**
+- `.include` directive: include another file inline using `.include "file.asm"` or `.include 'file.asm'`. Includes are resolved relative to the including file and support recursive expansion up to 16 levels.
 
-	```pwsh
-	npm install
-	npm run compile
-	```
+- Origins mapping: when using `.include`, the assembler records the original file and line for each expanded line. Errors and warnings reference the original filename and line number and print the offending source line plus a `file:///` link.
 
-- **Assemble `test.asm` into `test.rom`**
+- Tokens file: the assembler writes a JSON alongside the ROM (e.g., `test.json`) containing `labels` with addresses (hex), and the original `src` basename and `line` where each label was defined. This is useful for setting breakpoints by name in the emulator/debugger.
 
-	We include a small runner at `scripts/run-assembler.js` which uses the compiled assembler in `out/` and writes `test.rom` in the workspace root.
+- Warnings for immediates/addresses: if an immediate or address exceeds the instruction width (8-bit or 16-bit), the assembler emits a warning and truncates the value to the appropriate width. These are currently non-fatal warnings.
 
-	```pwsh
-	node .\scripts\run-assembler.js
-	```
+- Diagnostics: invalid mnemonics or bad operands are reported as errors with file/line and the offending source text. The assembler rejects invalid operations such as `MOV M,M`.
 
-- **Update `test.json` with labels extracted from the assembly source**
+Extending the workflow
+----------------------
 
-	The helper script `scripts/update-test-json.js` parses `test.asm`, collects labels and addresses, and writes them into `test.json` under the `labels` object (addresses are written as `0xHHHH`). Run:
+- If you want a single npm script that compiles, assembles, updates labels, and runs the emulator, you can add an npm script to `package.json`. Example:
 
-	```pwsh
-	node .\scripts\update-test-json.js
-	```
+```json
+"scripts": {
+  "assemble:run": "npm run compile && node ./scripts/run-assembler.js && node ./scripts/update-test-json.js && C:\\Work\\Programming\\devector\\bin\\devector.exe .\\test.rom"
+}
+```
 
-- **Run the external emulator**
+Adjust the emulator path to the location of `devector.exe` on your machine.
 
-	If you have the external emulator `devector.exe` available at `https://github.com/parallelno/Devector`, launch it with the produced ROM:
+Want help?
 
-	```pwsh
-	devector.exe test.rom
-	```
+Tell me whether you want:
 
-	The emulator will load the ROM and print runtime traces to the console. If you see messages like "File loaded" and "Break: elapsed cpu cycles", the ROM ran and hit a breakpoint or halted.
+- The `assemble:run` npm script added automatically, or
+- Oversize-immediate warnings promoted to errors, or
+- Unit tests added for `.include` origin mapping and immediate-size warnings.
 
-Notes and tips
--------------
-
-- The assembler supports `.org` directives (decimal, `0x..`, or `$..` syntax). Use `.org 0x100` to start assembling at address `0x0100`.
-- Labels produced by the assembler are included in `test.json` as `"label": "0xHHHH"`. The debugger/emulator can use these labels for breakpoints.
-- If you want a single npm command to run everything (compile, assemble, update labels, and run the emulator), you can add a script to `package.json`. Example (PowerShell-aware usage may require wrapping commands):
-
-	```json
-	"scripts": {
-		"assemble:run": "npm run compile && node ./scripts/run-assembler.js && node ./scripts/update-test-json.js && C:\\Work\\Programming\\devector\\bin\\devector.exe C:\\Work\\Programming\\vscode_vector\\test.rom"
-	}
-	```
-
-	Adjust the emulator path to where `devector.exe` is installed on your machine.
-
-If you'd like, I can add the `assemble:run` npm script to `package.json` for convenience. (I won't modify it without your permission.)
+I won't make those changes without your confirmation.
