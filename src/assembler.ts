@@ -1,10 +1,12 @@
 import * as fs from 'fs';
+import * as path from 'path';
 
 type AssembleResult = {
   success: boolean;
   output?: Buffer;
   map?: Record<number, number>; // source line (1-based) -> address
   errors?: string[];
+  labels?: Record<string, { addr: number; line: number }>;
 };
 
 const regCodes: Record<string, number> = {
@@ -35,17 +37,17 @@ function toByte(v: string): number | null {
   return null;
 }
 
-function parseAddressToken(v: string, labels?: Map<string, number>): number | null {
+function parseAddressToken(v: string, labels?: Map<string, { addr: number; line: number }>): number | null {
   if (/^0x[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(2), 16) & 0xffff;
   if (/^\$[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(1), 16) & 0xffff;
   if (/^[0-9]+$/.test(v)) return parseInt(v, 10) & 0xffff;
-  if (labels && labels.has(v)) return labels.get(v)! & 0xffff;
+  if (labels && labels.has(v)) return labels.get(v)!.addr & 0xffff;
   return null;
 }
 
 export function assemble(source: string): AssembleResult {
   const lines = source.split(/\r?\n/);
-  const labels = new Map<string, number>();
+  const labels = new Map<string, { addr: number; line: number }>();
   let addr = 0;
   const errors: string[] = [];
 
@@ -62,7 +64,7 @@ export function assemble(source: string): AssembleResult {
       tokens.shift();
       if (!tokens.length) {
         if (labels.has(labelHere)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
-        labels.set(labelHere, addr);
+        labels.set(labelHere, { addr, line: i + 1 });
         continue;
       }
     } else if (tokens.length >= 2 && /^\.?org$/i.test(tokens[1])) {
@@ -90,7 +92,7 @@ export function assemble(source: string): AssembleResult {
       addr = val;
       if (labelHere) {
         if (labels.has(labelHere)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
-        labels.set(labelHere, addr);
+        labels.set(labelHere, { addr, line: i + 1 });
       }
       continue;
     }
@@ -212,7 +214,7 @@ export function assemble(source: string): AssembleResult {
       if (/^[0-9]+$/.test(arg) || /^0x[0-9a-fA-F]+$/.test(arg)) {
         target = parseInt(arg);
       } else if (labels.has(arg)) {
-        target = labels.get(arg)!;
+        target = labels.get(arg)!.addr;
       } else {
         errors.push(`Unknown label or address '${arg}' at ${srcLine}`);
         target = 0;
@@ -248,7 +250,7 @@ export function assemble(source: string): AssembleResult {
       let target = 0;
       if (/^0x[0-9a-fA-F]+$/.test(val)) target = parseInt(val.slice(2), 16);
       else if (/^[0-9]+$/.test(val)) target = parseInt(val);
-      else if (labels.has(val)) target = labels.get(val)!;
+      else if (labels.has(val)) target = labels.get(val)!.addr;
       else { errors.push(`Bad LXI value '${val}' at ${srcLine}`); target = 0; }
       out.push(opcode & 0xff);
       out.push(target & 0xff);
@@ -288,13 +290,40 @@ export function assemble(source: string): AssembleResult {
 
   if (errors.length) return { success: false, errors };
 
-  return { success: true, output: Buffer.from(out), map };
+  // convert labels map to plain object for return
+  const labelsOut: Record<string, { addr: number; line: number }> = {};
+  for (const [k, v] of labels) labelsOut[k] = { addr: v.addr, line: v.line };
+
+  return { success: true, output: Buffer.from(out), map, labels: labelsOut };
 }
 
 // convenience when using from extension
-export function assembleAndWrite(source: string, outPath: string): { success: boolean; path?: string; errors?: string[] } {
+export function assembleAndWrite(source: string, outPath: string, sourcePath?: string): { success: boolean; path?: string; errors?: string[] } {
   const res = assemble(source);
   if (!res.success || !res.output) return { success: false, errors: res.errors };
   fs.writeFileSync(outPath, res.output);
+
+  // write token file (JSON) next to outPath, same base name but .json extension
+  try {
+    const tokenPath = outPath.replace(/\.[^/.]+$/, '.json');
+    const tokens: any = {
+      labels: {},
+      consts: {}
+    };
+    if (res.labels) {
+      for (const [name, info] of Object.entries(res.labels)) {
+        tokens.labels[name] = {
+          addr: '0x' + info.addr.toString(16).toUpperCase().padStart(4, '0'),
+          src: sourcePath ? path.basename(sourcePath) : undefined,
+          line: info.line
+        };
+      }
+    }
+    fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 4), 'utf8');
+  } catch (err) {
+    // non-fatal: write failed
+    console.error('Warning: failed to write token file:', err);
+  }
+
   return { success: true, path: outPath };
 }
