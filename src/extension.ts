@@ -9,7 +9,8 @@ export function activate(context: vscode.ExtensionContext) {
     const doc = editor.document;
     if (!doc.fileName.endsWith('.asm')) { vscode.window.showWarningMessage('File does not have .asm extension, still attempting to assemble.'); }
     const src = doc.getText();
-    const res = assemble(src);
+    // pass the document file path so assembler can resolve .include relative paths
+    const res = assemble(src, doc.fileName);
     if (!res.success) { vscode.window.showErrorMessage('Assemble failed: ' + (res.errors || []).join('; ')); return; }
     const outPath = doc.fileName.replace(/\.asm$/i, '.bin');
     const fs = require('fs');

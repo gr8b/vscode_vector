@@ -1,10 +1,16 @@
 {
-  "name": "vscode-i8080",
-  "displayName": "Intel 8080 Asm + Debugger",
-  "description": "Minimal VS Code extension: assemble i8080 asm and run a simple debug session.",
-  "version": "0.0.1",
+  "name": "vscode-vector",
+  "displayName": "Vector 06c Asm + Debugger",
+  "description": "VS Code extension: assemble i8080 asm and run a simple debug session.",
+  "version": "0.1.10",
+  "publisher": "AlexFedotovskikh",
+  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.70.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parallelno/vscode_vector"
   },
   "main": "./out/extension.js",
   "scripts": {

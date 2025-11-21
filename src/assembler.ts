@@ -114,6 +114,8 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
   const labels = new Map<string, { addr: number; line: number; src?: string }>();
   // localsIndex: scopeKey -> (localName -> array of { key, line }) ordered by appearance
   const localsIndex = new Map<string, Map<string, Array<{ key: string; line: number }>>>();
+  // global numeric id counters per local name to ensure exported keys are unique
+  const globalLocalCounters = new Map<string, number>();
   const scopes: string[] = new Array(lines.length);
   let directiveCounter = 0;
   function getFileKey(orig?: { file?: string; line: number }) {
@@ -136,6 +138,16 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     // handle optional leading label (either with colon or bare before an opcode/directive)
     const tokens = line.split(/\s+/);
     let labelHere: string | null = null;
+    // If the origin file changed from the previous line, treat it as a scope boundary
+    if (i > 0) {
+      const prev = origins[i - 1];
+      const curr = origins[i];
+      const prevKey = prev && prev.file ? path.resolve(prev.file) : (sourcePath ? path.resolve(sourcePath) : '<memory>');
+      const currKey = curr && curr.file ? path.resolve(curr.file) : (sourcePath ? path.resolve(sourcePath) : '<memory>');
+      if (prevKey !== currKey) {
+        directiveCounter++;
+      }
+    }
     // record current scope key for this line (before any .org on this line takes effect)
     scopes[i] = getScopeKey(origins[i]);
 
@@ -151,8 +163,10 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         if (!fileMap) { fileMap = new Map(); localsIndex.set(scopeKey, fileMap); }
         let arr = fileMap.get(localName);
         if (!arr) { arr = []; fileMap.set(localName, arr); }
-        const id = arr.length;
-        const key = '@' + localName + '_' + id;
+        // assign a globally unique integer id for this local name
+        const gid = globalLocalCounters.get(localName) || 0;
+        globalLocalCounters.set(localName, gid + 1);
+        const key = '@' + localName + '_' + gid;
         arr.push({ key, line: org ? org.line : i + 1 });
         labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
       } else {
@@ -229,8 +243,9 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
           if (!fileMap) { fileMap = new Map(); localsIndex.set(newScope, fileMap); }
           let arr = fileMap.get(localName);
           if (!arr) { arr = []; fileMap.set(localName, arr); }
-          const id = arr.length;
-          const key = '@' + localName + '_' + id;
+          const gid = globalLocalCounters.get(localName) || 0;
+          globalLocalCounters.set(localName, gid + 1);
+          const key = '@' + localName + '_' + gid;
           arr.push({ key, line: org ? org.line : i + 1 });
           labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
         } else {
@@ -744,8 +759,8 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         target = num;
         if (target > 0xffff) warnings.push(`Address ${arg} (0x${target.toString(16).toUpperCase()}) too large for ${op} at ${srcLine}; truncating to 16-bit`);
       } else {
-        const resolved = resolveLocalLabelKey(arg, origins[i] && origins[i].file ? origins[i].file : undefined, sourcePath);
-        if (labels.has(resolved)) target = labels.get(resolved)!.addr;
+        const resolvedVal = resolveAddressToken(arg, srcLine);
+        if (resolvedVal !== null) target = resolvedVal;
         else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
       }
       out.push(callMap[op]); out.push(target & 0xff); out.push((target >> 8) & 0xff); addr += 3; continue;
