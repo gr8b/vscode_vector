@@ -2,10 +2,13 @@ import * as vscode from 'vscode';
 import { Emulator } from './emulator';
 import * as path from 'path';
 import * as fs from 'fs';
+import { Hardware } from './hardware';
 import { HardwareReq } from './hardware_reqs';
 import { FRAME_H, FRAME_LEN, FRAME_W } from './display';
+import Memory from './memory';
+import CPU, { State } from './cpu_i8080';
 
-let currentPanelController: { pause: () => void; resume: () => void; runInstructions?: (count: number) => void } | null = null;
+let currentPanelController: { pause: () => void; resume: () => void; runFrame: () => void; } | null = null;
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext)
 {
@@ -54,51 +57,20 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
   currentPanelController = {
     pause: () => {
       running = false;
-      try {
-        // log current PC/opcode/regs to output channel and webview
-        // const addr = emu.regs.PC & 0xffff;
-        // const opcode = (emu as any).cpu.readByte(addr) & 0xff;
-        // const regs = (emu as any).cpu.snapshotRegs ? (emu as any).cpu.snapshotRegs() : emu.regs;
-        // const addrHex = addr.toString(16).padStart(4, '0');
-        // const opHex = opcode.toString(16).padStart(2, '0');
-        // const flagsStr = 'S=' + (regs.flags.S ? '1' : '0') + ' Z=' + (regs.flags.Z ? '1' : '0') + ' AC=' + (regs.flags.AC ? '1' : '0') + ' P=' + (regs.flags.P ? '1' : '0') + ' CY=' + (regs.flags.CY ? '1' : '0');
-        // const hl = ((regs.H << 8) | regs.L) & 0xffff;
-        // let mVal = 0;
-        // try { mVal = (emu as any).cpu.readByte(hl) & 0xff; } catch (e) {}
-        // const mHex = mVal.toString(16).padStart(2, '0');
-        // const pcHex = (regs.PC & 0xffff).toString(16).padStart(4,'0');
-        // const line = `PAUSE ${addrHex}: ${opHex} PC=${pcHex} A=${regs.A.toString(16).padStart(2,'0')} B=${regs.B.toString(16).padStart(2,'0')} C=${regs.C.toString(16).padStart(2,'0')} D=${regs.D.toString(16).padStart(2,'0')} E=${regs.E.toString(16).padStart(2,'0')} H=${regs.H.toString(16).padStart(2,'0')} L=${regs.L.toString(16).padStart(2,'0')} M=${mHex} SP=${regs.SP.toString(16).padStart(4,'0')} ${flagsStr}`;
-        // try { emuOutput.appendLine(line); } catch(e) {}
-        // try { panel.webview.postMessage({ type: 'pause', addr, opcode, regs, m: mVal, pc: regs.PC }); } catch(e) {}
-      } catch (e) {}
+      printDebugState('PAUSE', emu.hardware!, emuOutput, panel);
     },
     resume: () => { if (!running) { running = true; tick(); } },
-    runInstructions: (count: number) => {
-      // stop regular frame loop while we run instructions
+    runFrame: () => {
+      // run one full frame synchronously, then leave paused
       running = false;
-      try {
-        // const result = emu.runUntilBreakpointOrHalt(count);
-        // After running, emit a pause-like log
-        try {
-          // const addr = emu.regs.PC & 0xffff;
-          // const opcode = (emu as any).cpu.readByte(addr) & 0xff;
-          // const regs = (emu as any).cpu.snapshotRegs ? (emu as any).cpu.snapshotRegs() : emu.regs;
-          // const addrHex = addr.toString(16).padStart(4, '0');
-          // const opHex = opcode.toString(16).padStart(2, '0');
-          // const flagsStr = 'S=' + (regs.flags.S ? '1' : '0') + ' Z=' + (regs.flags.Z ? '1' : '0') + ' AC=' + (regs.flags.AC ? '1' : '0') + ' P=' + (regs.flags.P ? '1' : '0') + ' CY=' + (regs.flags.CY ? '1' : '0');
-          // const hl = ((regs.H << 8) | regs.L) & 0xffff;
-          // let mVal = 0;
-          // try { mVal = (emu as any).cpu.readByte(hl) & 0xff; } catch (e) {}
-          // const mHex = mVal.toString(16).padStart(2, '0');
-          // const pcHex = (regs.PC & 0xffff).toString(16).padStart(4,'0');
-          // const line = `RUN ${count.toString(16)}: ${addrHex}: ${opHex} PC=${pcHex} A=${regs.A.toString(16).padStart(2,'0')} B=${regs.B.toString(16).padStart(2,'0')} C=${regs.C.toString(16).padStart(2,'0')} D=${regs.D.toString(16).padStart(2,'0')} E=${regs.E.toString(16).padStart(2,'0')} H=${regs.H.toString(16).padStart(2,'0')} L=${regs.L.toString(16).padStart(2,'0')} M=${mHex} SP=${regs.SP.toString(16).padStart(4,'0')} ${flagsStr}`;
-          // try { emuOutput.appendLine(line); } catch (e) {}
-          // try { panel.webview.postMessage({ type: 'pause', addr, opcode, regs, m: mVal, pc: regs.PC }); } catch (e) {}
-        } catch (e) {}
-      } finally {
-        // leave emulator paused
-        running = false;
-      }
+      emu.hardware?.Request(HardwareReq.STOP);
+      emu.hardware?.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
+
+      // get frame and post it to the webview so the panel updates immediately
+      const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
+      try { panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer }); } catch (e) {}
+
+      printDebugState('RUN FRAME', emu.hardware!, emuOutput, panel);
     }
   };
 
@@ -142,6 +114,60 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
   }, null, context.subscriptions);
 }
 
+
+  // helper: read cpu/memory state and return a compact debug object
+  function getDebugState(hardware: Hardware)
+  {
+    const state = hardware?.cpu?.state ?? new State();
+    const pc = state.regs.pc.pair;
+    const opcode = hardware?.memory?.GetByte(pc) ?? 0;
+    const hl = state.regs.hl.pair;
+    const mVal = hardware?.memory?.GetByte(hl) ?? 0;
+    return { state, pc, opcode, mVal };
+  }
+
+  function printDebugState(
+    header:string, hardware: Hardware,
+    emuOutput: vscode.OutputChannel, panel: vscode.WebviewPanel)
+  {
+    try {
+        const s = getDebugState(hardware!);
+        const state = s.state;
+        const mVal = s.mVal;
+
+        const addrHex = s.pc.toString(16).padStart(4, '0');
+        const opHex = s.opcode.toString(16).padStart(2, '0');
+        const pcHex = (s.state.regs.pc.pair ?? 0).toString(16).padStart(4, '0');
+        const flagsStr =
+           'S=' + (s.state.regs.af.s ? '1' : '0') +
+          ' Z=' + (s.state.regs.af.z ? '1' : '0') +
+          ' AC=' + (s.state.regs.af.ac ? '1' : '0') +
+          ' P=' + (s.state.regs.af.p ? '1' : '0') +
+          ' CY=' + (s.state.regs.af.c ? '1' : '0');
+
+        const line = `${header} ${addrHex}:
+          ${opHex} PC=${pcHex} A=${(s.state.regs.af.a).toString(16).padStart(2,'0')}
+          B=${(s.state.regs.bc.h).toString(16).padStart(2,'0')}
+          C=${(s.state.regs.bc.l).toString(16).padStart(2,'0')}
+          D=${(s.state.regs.de.h).toString(16).padStart(2,'0')}
+          E=${(s.state.regs.de.l).toString(16).padStart(2,'0')}
+          H=${(s.state.regs.hl.h).toString(16).padStart(2,'0')}
+          L=${(s.state.regs.hl.l).toString(16).padStart(2,'0')}
+          M=${mVal.toString(16).padStart(2,'0')}
+          SP=${(s.state.regs.sp.pair).toString(16).padStart(4,'0')} ${flagsStr}`;
+
+        try { emuOutput.appendLine(line); } catch (e) {}
+
+        try { panel.webview.postMessage(
+          { type: 'pause', addr: s.pc, opcode: s.opcode, regs: s.state.regs, m: mVal, pc: s.state.regs.pc.pair });
+        } catch (e) {}
+
+      } catch (e) {
+        try { emuOutput.appendLine(`${header} (error reading state)`); } catch (ee) {}
+      }
+  }
+
+
 export function pauseEmulatorPanel() {
   if (currentPanelController) currentPanelController.pause();
   else vscode.window.showWarningMessage('Emulator panel not open');
@@ -152,10 +178,9 @@ export function resumeEmulatorPanel() {
   else vscode.window.showWarningMessage('Emulator panel not open');
 }
 
-export function run10KInstructionsPanel() {
-  if (currentPanelController && currentPanelController.runInstructions) {
-    // run 0x10000 instructions then pause
-    currentPanelController.runInstructions(0x10000);
+export function runFramePanel() {
+  if (currentPanelController && currentPanelController.runFrame) {
+    currentPanelController.runFrame();
   } else {
     vscode.window.showWarningMessage('Emulator panel not open');
   }
