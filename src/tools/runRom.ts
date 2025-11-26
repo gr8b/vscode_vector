@@ -11,7 +11,7 @@ import { assemble } from '../assembler';
 // number of instructions is reached. It steps through each instruction and
 // prints CPU state.
 
-const INSTR_MAX = 1000;
+let INSTR_MAX = 1000;
 
 const argv = process.argv.slice(2);
 if (argv.length < 1) {
@@ -29,7 +29,7 @@ if (!fs.existsSync(romPath)) {
 if (argv.length > 1) {
   const maxInstr = parseInt(argv[1], 10);
   if (!isNaN(maxInstr) && maxInstr > 0) {
-    (global as any).INSTR_MAX = maxInstr;
+    INSTR_MAX = maxInstr;
   }
 }
 
