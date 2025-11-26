@@ -1,7 +1,10 @@
 import { DebugSession, InitializedEvent, StoppedEvent, TerminatedEvent, Thread, StackFrame, Scope, Source, Handles, Variable } from 'vscode-debugadapter';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { Emulator } from './emulator';
 import { assemble } from './assembler';
+import { HardwareReq } from './hardware_reqs';
 
 class I8080DebugSession extends DebugSession {
   private emulator: Emulator | null = null;
@@ -28,19 +31,23 @@ class I8080DebugSession extends DebugSession {
     }
 
     let bin: Buffer | null = null;
+    let romPath = program;
     if (program.endsWith('.asm')) {
       const src = fs.readFileSync(program, 'utf8');
       const res = assemble(src);
       if (!res.success || !res.output) { this.sendErrorResponse(response, 2, 'Assemble failed'); return; }
-      bin = res.output;
+      bin = res.output as Buffer;
       this.sourceMap = res.map || {};
+      // write assembled binary to a temp ROM file and use that path
+      const tmp = path.join(os.tmpdir(), `vscode_vector_${Date.now()}.rom`);
+      fs.writeFileSync(tmp, bin);
+      romPath = tmp;
     } else {
-      bin = fs.readFileSync(program);
       this.sourceMap = {};
     }
 
-    this.emulator = new Emulator();
-    this.emulator.load(bin, 0);
+    // Construct Emulator and load the ROM via constructor
+    this.emulator = new Emulator('', {}, romPath);
 
     this.sendResponse(response);
   }
@@ -70,7 +77,7 @@ class I8080DebugSession extends DebugSession {
   protected stackTraceRequest(response: any, args: any): void {
     const frames: StackFrame[] = [];
     if (this.emulator) {
-      const pc = this.emulator.regs.PC;
+      const pc = this.emulator.hardware?.cpu?.state.regs.pc.pair ?? 0;
       const srcLine = Object.keys(this.sourceMap).find(k => this.sourceMap[parseInt(k)] === pc);
       const lineNum = srcLine ? parseInt(srcLine) : 1;
       frames.push(new StackFrame(1, 'main', new Source('program', args && args.source ? args.source.path : undefined), lineNum, 0));
@@ -101,13 +108,13 @@ class I8080DebugSession extends DebugSession {
     const handle = args.variablesReference;
     const obj = this.reverseHandle.get(handle);
     if (obj === 'regs' || obj === 'regsHandle' || obj === undefined) {
-      if (!this.emulator) { response.body = { variables }; this.sendResponse(response); return; }
-      const r = this.emulator.regs;
-      const regs: Array<[string, number]> = [['A', r.A], ['B', r.B], ['C', r.C], ['D', r.D], ['E', r.E], ['H', r.H], ['L', r.L], ['PC', r.PC], ['SP', r.SP]];
+      if (!this.emulator || !this.emulator.hardware?.cpu?.state) { response.body = { variables }; this.sendResponse(response); return; }
+      const r = this.emulator.hardware.cpu.state.regs;
+      const regs: Array<[string, number]> = [['A', r.af.a], ['B', r.bc.h], ['C', r.bc.l], ['D', r.de.h], ['E', r.de.l], ['H', r.hl.h], ['L', r.hl.l], ['PC', r.pc.pair], ['SP', r.sp.pair]];
       for (const [k, v] of regs) {
-        variables.push({ name: k, value: v.toString(), variablesReference: 0 });
+        variables.push({ name: k, value: (v ?? 0).toString(), variablesReference: 0 });
       }
-      variables.push({ name: 'Z', value: (r.flags.Z ? '1' : '0'), variablesReference: 0 });
+      variables.push({ name: 'Z', value: (r.af.z ? '1' : '0'), variablesReference: 0 });
     }
     response.body = { variables };
     this.sendResponse(response);
@@ -115,17 +122,25 @@ class I8080DebugSession extends DebugSession {
 
   protected continueRequest(response: any, args: any): void {
     if (!this.emulator) { this.sendResponse(response); return; }
-    for (const b of this.breakpoints) this.emulator.breakpoints.add(b);
-    const res = this.emulator.runUntilBreakpointOrHalt();
-    if (res.stoppedOnBreakpoint) this.sendEvent(new StoppedEvent('breakpoint', 1));
-    else if (res.halted) this.sendEvent(new StoppedEvent('exception', 1));
+    // Execute a single frame (synchronous) and then report stopped or breakpoint
+    try {
+      this.emulator.hardware?.Request(HardwareReq.STOP);
+      this.emulator.hardware?.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
+    } catch (e) { /* ignore execution errors */ }
+
+    const pc = this.emulator.hardware?.cpu?.state.regs.pc.pair ?? 0;
+    if (this.breakpoints.has(pc)) this.sendEvent(new StoppedEvent('breakpoint', 1));
+    else this.sendEvent(new StoppedEvent('step', 1));
     this.sendResponse(response);
   }
 
   protected nextRequest(response: any, args: any): void {
     if (!this.emulator) { this.sendResponse(response); return; }
-    const res = this.emulator.step();
-    if (res.halted) this.sendEvent(new TerminatedEvent());
+    try {
+      this.emulator.hardware?.Request(HardwareReq.EXECUTE_INSTR);
+    } catch (e) { /* ignore */ }
+    const halted = this.emulator.hardware?.cpu?.state.ints?.hlta ?? false;
+    if (halted) this.sendEvent(new TerminatedEvent());
     else this.sendEvent(new StoppedEvent('step', 1));
     this.sendResponse(response);
   }
