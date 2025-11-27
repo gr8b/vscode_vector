@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
     if (!doc.fileName.endsWith('.asm')) { vscode.window.showWarningMessage('File does not have .asm extension, still attempting to assemble.'); }
     const src = doc.getText();
     // pass the document file path so assembler can resolve .include relative paths
-    const outPath = doc.fileName.replace(/\.asm$/i, '.bin');
+    const outPath = doc.fileName.replace(/\.asm$/i, '.rom');
     // use assembleAndWrite which prints formatted errors/warnings to stderr/stdout
     const writeRes = assembleAndWrite(src, outPath, doc.fileName);
     if (!writeRes.success) {
