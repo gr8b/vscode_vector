@@ -11,7 +11,9 @@ import { assemble } from '../assembler';
 // number of instructions is reached. It steps through each instruction and
 // prints CPU state.
 
-let INSTR_MAX = 1000;
+const START_LOG_ADDR = 0x100;
+const DEFAULT_INSTR_MAX = 1000;
+let maxInstr = DEFAULT_INSTR_MAX;
 
 const argv = process.argv.slice(2);
 if (argv.length < 1) {
@@ -27,10 +29,7 @@ if (!fs.existsSync(romPath)) {
 }
 
 if (argv.length > 1) {
-  const maxInstr = parseInt(argv[1], 10);
-  if (!isNaN(maxInstr) && maxInstr > 0) {
-    INSTR_MAX = maxInstr;
-  }
+  maxInstr = parseInt(argv[1], 10) || DEFAULT_INSTR_MAX;
 }
 
 console.log('Inited emulator with loaded ROM:', path.resolve(romPath));
@@ -76,17 +75,28 @@ function printState(state?: State) {
     const h_str: string = (r.hl.h).toString(16).padStart(2,'0')
     const l_str: string = (r.hl.l).toString(16).padStart(2,'0')
 
-    console.log(`PC=${pc_str} SP=${sp_str} A=${a_str} B=${b_str} C=${c_str} D=${d_str} E=${e_str} H=${h_str} L=${l_str} Flags=${flags}`);
+    const opcode = emu.hardware?.memory?.GetByte(r.pc.pair & 0xffff) ?? 0;
+    const b1 = emu.hardware?.memory?.GetByte((r.pc.pair + 1) & 0xffff) ?? 0;
+    const b2 = emu.hardware?.memory?.GetByte((r.pc.pair + 2) & 0xffff) ?? 0;
+    const opcode_s = opcode.toString(16).padStart(2,'0')
+    const b1_s = b1.toString(16).padStart(2,'0')
+    const b2_s = b2.toString(16).padStart(2,'0');
+
+    console.log(`${pc_str}: ${opcode_s} ${b1_s} ${b2_s} SP=${sp_str} A=${a_str} B=${b_str} C=${c_str} D=${d_str} E=${e_str} H=${h_str} L=${l_str} Flags=${flags}`);
 }
 
-console.log('Initial state:');
-printState(emu.hardware?.cpu?.state);
-
-console.log('\nStepping until HLT or ' + INSTR_MAX + ' instructions:');
-for (let i = 0; i < INSTR_MAX; i++)
+console.log('\nStepping until HLT or ' + maxInstr + ' instructions:');
+let print_log = false;
+for (let i = 0; i < maxInstr; i++)
 {
+  if (print_log){
+    printState(emu.hardware?.cpu?.state);
+  }
+  else if ((emu.hardware?.cpu?.state.regs.pc.pair ?? 0) == START_LOG_ADDR){
+    print_log = true;
+  }
+
   emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
-  printState(emu.hardware?.cpu?.state);
 
   // check for HLT/halt condition
   const halted = emu.hardware?.cpu?.state.ints.hlta ?? false;
