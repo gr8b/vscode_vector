@@ -8,6 +8,8 @@ import { FRAME_H, FRAME_LEN, FRAME_W } from './display';
 import Memory from './memory';
 import CPU, { State } from './cpu_i8080';
 
+const log_per_frame = true;
+
 let currentPanelController: { pause: () => void; resume: () => void; runFrame: () => void; } | null = null;
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext)
@@ -60,18 +62,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
       printDebugState('PAUSE', emu.hardware!, emuOutput, panel);
     },
     resume: () => { if (!running) { running = true; tick(); } },
-    runFrame: () => {
-      // run one full frame synchronously, then leave paused
-      running = false;
-      emu.hardware?.Request(HardwareReq.STOP);
-      emu.hardware?.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
-
-      // get frame and post it to the webview so the panel updates immediately
-      const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
-      try { panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer }); } catch (e) {}
-
-      printDebugState('RUN FRAME', emu.hardware!, emuOutput, panel);
-    }
+    runFrame: () => { running = false; tick(); }
   };
 
   panel.webview.onDidReceiveMessage(msg => {
@@ -93,16 +84,19 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
 
   async function tick()
   {
-    if (!running) return;
-
     const res = emu.hardware?.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
     const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
+
+    if (log_per_frame){
+      printDebugState('RUN', emu.hardware!, emuOutput, panel);
+    }
 
     try {
       panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer });
     }
     catch (e) { /* ignore frame conversion errors */ }
 
+    if (!running) return;
     // schedule next frame at ~50fps
     setTimeout(tick, 1000 / 50);
   }
@@ -138,23 +132,23 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
         const addrHex = s.pc.toString(16).padStart(4, '0');
         const opHex = s.opcode.toString(16).padStart(2, '0');
         const flagsStr =
-           'S=' + (s.state.regs.af.s ? '1' : '0') +
-          ' Z=' + (s.state.regs.af.z ? '1' : '0') +
-          ' AC=' + (s.state.regs.af.ac ? '1' : '0') +
-          ' P=' + (s.state.regs.af.p ? '1' : '0') +
-          ' CY=' + (s.state.regs.af.c ? '1' : '0');
+           `S=${s.state.regs.af.s ? '1' : '0'}` +
+          ` Z=${s.state.regs.af.z ? '1' : '0'}` +
+          ` AC=${s.state.regs.af.ac ? '1' : '0'}` +
+          ` P=${s.state.regs.af.p ? '1' : '0'}` +
+          ` CY=${s.state.regs.af.c ? '1' : '0'}`;
 
-        const line = `${header} ${addrHex}: ' +
-          '${opHex} A=${(s.state.regs.af.a).toString(16).padStart(2,'0')} '+
-          'B=${(s.state.regs.bc.h).toString(16).padStart(2,'0')} '+
-          'C=${(s.state.regs.bc.l).toString(16).padStart(2,'0')} '+
-          'D=${(s.state.regs.de.h).toString(16).padStart(2,'0')} '+
-          'E=${(s.state.regs.de.l).toString(16).padStart(2,'0')} '+
-          'H=${(s.state.regs.hl.h).toString(16).padStart(2,'0')} '+
-          'L=${(s.state.regs.hl.l).toString(16).padStart(2,'0')} '+
-          'M=${mVal.toString(16).padStart(2,'0')} '+
-          'SP=${(s.state.regs.sp.pair).toString(16).padStart(4,'0')}' +
-          '${flagsStr}`;
+        const line = `${header} ${addrHex}: ` +
+          `${opHex} A=${(s.state.regs.af.a).toString(16).padStart(2,'0')} `+
+          `B=${(s.state.regs.bc.h).toString(16).padStart(2,'0')} `+
+          `C=${(s.state.regs.bc.l).toString(16).padStart(2,'0')} `+
+          `D=${(s.state.regs.de.h).toString(16).padStart(2,'0')} `+
+          `E=${(s.state.regs.de.l).toString(16).padStart(2,'0')} `+
+          `H=${(s.state.regs.hl.h).toString(16).padStart(2,'0')} `+
+          `L=${(s.state.regs.hl.l).toString(16).padStart(2,'0')} `+
+          `M=${mVal.toString(16).padStart(2,'0')} `+
+          `SP=${(s.state.regs.sp.pair).toString(16).padStart(4,'0')}` +
+          `${flagsStr}`;
 
         try { emuOutput.appendLine(line); } catch (e) {}
 
@@ -203,11 +197,35 @@ function getWebviewContent() {
       const msg = event.data;
       if (msg.type === 'frame') {
           const w = msg.width, h = msg.height;
-          const buf = new Uint8ClampedArray(msg.data);
-          const img = new ImageData(buf, w, h);
-          // scale canvas to fit container
-          canvas.width = w; canvas.height = h;
-          ctx.putImageData(img, 0, 0);
+          // msg.data is an ArrayBuffer with a Uint32Array of ARGB values (0xAARRGGBB)
+          try {
+            const src32 = new Uint32Array(msg.data);
+            const buf = new Uint8ClampedArray(src32.length * 4);
+            for (let i = 0; i < src32.length; i++) {
+              const v = src32[i] >>> 0; // ensure unsigned
+              const a = (v >>> 24) & 0xff;
+              const r = (v >>> 16) & 0xff;
+              const g = (v >>> 8) & 0xff;
+              const b = v & 0xff;
+              const idx = i * 4;
+              buf[idx + 0] = r;
+              buf[idx + 1] = g;
+              buf[idx + 2] = b;
+              buf[idx + 3] = a;
+            }
+            const img = new ImageData(buf, w, h);
+            // scale canvas to fit container
+            canvas.width = w; canvas.height = h;
+            ctx.putImageData(img, 0, 0);
+          } catch (e) {
+            // fallback: try interpreting data as bytes
+            try {
+              const buf = new Uint8ClampedArray(msg.data);
+              const img = new ImageData(buf, w, h);
+              canvas.width = w; canvas.height = h;
+              ctx.putImageData(img, 0, 0);
+            } catch (ee) { /* ignore */ }
+          }
         } else if (msg.type === 'instr') {
         try {
           const a = msg.addr.toString(16).padStart(4,'0');

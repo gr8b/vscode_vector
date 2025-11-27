@@ -1,0 +1,40 @@
+{
+    "labels": {
+        "START": {
+            "addr": "0x0100",
+            "src": "fill_scr.asm",
+            "line": 2
+        },
+        "clear_screen": {
+            "addr": "0x0103",
+            "src": "fill_scr.asm",
+            "line": 4
+        },
+        "fill_scr_8000": {
+            "addr": "0x010B",
+            "src": "fill_scr.asm",
+            "line": 8
+        },
+        "fill_scr": {
+            "addr": "0x0116",
+            "src": "fill_scr.asm",
+            "line": 16
+        },
+        "@loop_0": {
+            "addr": "0x0116",
+            "src": "fill_scr.asm",
+            "line": 17
+        },
+        "pause": {
+            "addr": "0x0121",
+            "src": "fill_scr.asm",
+            "line": 26
+        },
+        "@loop_1": {
+            "addr": "0x0123",
+            "src": "fill_scr.asm",
+            "line": 28
+        }
+    },
+    "consts": {}
+}

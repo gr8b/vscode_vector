@@ -792,6 +792,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
 // convenience when using from extension
 export function assembleAndWrite(source: string, outPath: string, sourcePath?: string): { success: boolean; path?: string; errors?: string[] } {
+  const startTime = Date.now();
   const res = assemble(source, sourcePath);
   if (!res.success || !res.output) {
     // Improve error messages: include the source line, filename, line number,
@@ -902,5 +903,11 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
     console.error('Warning: failed to write token file:', err);
   }
 
-  return { success: true, path: outPath };
+  const durationMs = Date.now() - startTime;
+  // Print a concise success message including compile time for CLI/debug usage
+  try {
+    console.log(`Devector: Compilation succeeded to ${outPath} (${res.output ? res.output.length : 0} bytes) in ${durationMs} ms`);
+  } catch (e) {}
+
+  return { success: true, path: outPath, timeMs: durationMs } as any;
 }

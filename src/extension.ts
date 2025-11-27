@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { assemble } from './assembler';
+import { assemble, assembleAndWrite } from './assembler';
 import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, runFramePanel } from './emulatorUI';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -11,12 +11,35 @@ export function activate(context: vscode.ExtensionContext) {
     if (!doc.fileName.endsWith('.asm')) { vscode.window.showWarningMessage('File does not have .asm extension, still attempting to assemble.'); }
     const src = doc.getText();
     // pass the document file path so assembler can resolve .include relative paths
-    const res = assemble(src, doc.fileName);
-    if (!res.success) { vscode.window.showErrorMessage('Assemble failed: ' + (res.errors || []).join('; ')); return; }
     const outPath = doc.fileName.replace(/\.asm$/i, '.bin');
-    const fs = require('fs');
-    fs.writeFileSync(outPath, res.output);
-    vscode.window.showInformationMessage(`Assembled to ${path.basename(outPath)}`);
+    // use assembleAndWrite which prints formatted errors/warnings to stderr/stdout
+    const writeRes = assembleAndWrite(src, outPath, doc.fileName);
+    if (!writeRes.success) {
+      // assembleAndWrite already printed formatted errors to stderr, but keep the popup
+      const errMsg = writeRes.errors ? writeRes.errors.join('; ') : 'Assemble failed';
+      // Also write the formatted errors to the Output panel so they are visible
+      try {
+        const outCh = vscode.window.createOutputChannel('Devector');
+        outCh.appendLine(`Devector: Compilation failed:\n${errMsg}`);
+        if (writeRes.errors && writeRes.errors.length) {
+          for (const e of writeRes.errors) {
+            outCh.appendLine(e);
+            outCh.appendLine('');
+          }
+        }
+        outCh.show(true);
+      } catch (e) { /* ignore any output channel errors */ }
+      //vscode.window.showErrorMessage('Compilation failed: ' + errMsg);
+      return;
+    }
+    // Also write success and timing info to the Output panel
+    try {
+      const outCh = vscode.window.createOutputChannel('Devector');
+      const timeMsg = (writeRes as any).timeMs !== undefined ? `${(writeRes as any).timeMs}` : '';
+      outCh.appendLine(`Devector: Compilation succeeded to ${path.basename(outPath)} in ${timeMsg} ms`);
+      outCh.show(true);
+    } catch (e) {}
+    //vscode.window.showInformationMessage(`Assembled to ${path.basename(outPath)}`);
   });
 
   context.subscriptions.push(disposable);
