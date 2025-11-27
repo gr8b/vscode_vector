@@ -1,15 +1,14 @@
 .org 0x100
-START:
   LXI SP, 0x8000
-clear_screen:
+start:
   LXI H, 0x8000
   MVI B, 0x00
   CALL fill_scr
-fill_scr_8000:
+
   LXI H, 0x8000
   MVI B, 0xFF
   CALL fill_scr
-JMP clear_screen
+JMP start
 
 ; HL - start of screen memory
 ; B - value to fill with

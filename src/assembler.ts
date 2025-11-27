@@ -362,8 +362,15 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (!fileMap) return null;
       const arr = fileMap.get(arg.slice(1));
       if (!arr || !arr.length) return null;
-      // by default pick the first definition in this scope (allows forward references)
-      const key = arr[0].key;
+      // Prefer the most-recent definition at or before this source line (supports multiple
+      // local labels with the same name in the same scope). If none are before the
+      // reference (forward reference), fall back to the first definition.
+      let chosen = arr[0];
+      for (const entry of arr) {
+        if ((entry.line || 0) <= lineIndex) chosen = entry;
+        else break;
+      }
+      const key = chosen.key;
       if (labels.has(key)) return labels.get(key)!.addr & 0xffff;
       return null;
     }
