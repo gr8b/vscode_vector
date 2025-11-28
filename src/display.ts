@@ -82,7 +82,7 @@ export class Display {
   memory?: Memory;
   io?: IO;
 
-  // framebuffers use 32-bit ARGB values
+  // framebuffers use 32-bit RGBA values (little-endian: bytes in memory are R,G,B,A)
   // rasterizer draws here
   frameBuffer: Uint32Array = new Uint32Array(FRAME_LEN);
   // to simulate VSYNC
@@ -93,7 +93,8 @@ export class Display {
   borderLeft = BORDER_LEFT;
   irqCommitPxl = IRQ_COMMIT_PXL;
 
-  // prebaked look-up vector_color->RGBA pallete
+  // prebaked look-up vector_color->RGBA palette (packed as 0xAABBGGRR so
+  // that in little-endian memory the bytes are [R,G,B,A])
   fullPalette: Uint32Array = new Uint32Array(FULL_PALETTE_LEN);
 
 
@@ -511,24 +512,25 @@ export class Display {
 
 
   // Vector color format: uint8_t BBGGGRRR
-  // Output Color: ARGB (Imgui Image)
-  VectorColorToArgb(vColor: number): number
+  // Output Color: 32-bit word packed so memory bytes are [R,G,B,A]
+  // For little-endian platforms the packed value is: (A<<24)|(B<<16)|(G<<8)|R
+  VectorColorToRgbaPacked(vColor: number): number
   {
     const r: number = (vColor & 0x07);
     const g: number = (vColor & 0x38) >> 3;
     const b: number = (vColor & 0xc0) >> 6;
-    const color =
-      0xFF000000 |
-      (r << (5 + 16)) |
-      (g << (5 + 8 )) |
-      (b << (6 + 0 ));
-    return color;
+    const r8 = (r << 5) & 0xFF;
+    const g8 = (g << 5) & 0xFF;
+    const b8 = (b << 6) & 0xFF;
+    const a8 = 0xFF;
+    const packed = (a8 << 24) | (b8 << 16) | (g8 << 8) | r8;
+    return packed >>> 0;
   }
 
   //Prebake palette to 256x256 color table
   PrebakeFullPalette() {
     for (let i = 0; i < FULL_PALETTE_LEN; i++) {
-      this.fullPalette[i] = this.VectorColorToArgb(i) >>> 0;
+      this.fullPalette[i] = this.VectorColorToRgbaPacked(i) >>> 0;
     }
   }
 

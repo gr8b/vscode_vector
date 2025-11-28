@@ -202,30 +202,18 @@ function getWebviewContent() {
       const msg = event.data;
       if (msg.type === 'frame') {
           const w = msg.width, h = msg.height;
-          // msg.data is an ArrayBuffer with a Uint32Array of ARGB values (0xAARRGGBB)
+          // msg.data is an ArrayBuffer containing native RGBA bytes (R,G,B,A per pixel)
           try {
-            const src32 = new Uint32Array(msg.data);
-            const buf = new Uint8ClampedArray(src32.length * 4);
-            for (let i = 0; i < src32.length; i++) {
-              const v = src32[i] >>> 0; // ensure unsigned
-              const a = (v >>> 24) & 0xff;
-              const r = (v >>> 16) & 0xff;
-              const g = (v >>> 8) & 0xff;
-              const b = v & 0xff;
-              const idx = i * 4;
-              buf[idx + 0] = r;
-              buf[idx + 1] = g;
-              buf[idx + 2] = b;
-              buf[idx + 3] = a;
-            }
+            const buf = new Uint8ClampedArray(msg.data);
             const img = new ImageData(buf, w, h);
             // scale canvas to fit container
             canvas.width = w; canvas.height = h;
             ctx.putImageData(img, 0, 0);
           } catch (e) {
-            // fallback: try interpreting data as bytes
+            // If that fails, try interpreting data as a 32-bit view and fall back
             try {
-              const buf = new Uint8ClampedArray(msg.data);
+              const src32 = new Uint32Array(msg.data);
+              const buf = new Uint8ClampedArray(src32.buffer);
               const img = new ImageData(buf, w, h);
               canvas.width = w; canvas.height = h;
               ctx.putImageData(img, 0, 0);

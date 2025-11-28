@@ -71,21 +71,8 @@ async function assembleIfNeeded(inputPath: string): Promise<string> {
   }
 }
 
-function argbToRgbaBuffer(arr: Uint32Array): Buffer {
-  const out = Buffer.alloc(arr.length * 4);
-  for (let i = 0; i < arr.length; i++) {
-    const v = arr[i] >>> 0; // ensure unsigned
-    const a = (v >> 24) & 0xff;
-    const r = (v >> 16) & 0xff;
-    const g = (v >> 8) & 0xff;
-    const b = v & 0xff;
-    out[i * 4 + 0] = r;
-    out[i * 4 + 1] = g;
-    out[i * 4 + 2] = b;
-    out[i * 4 + 3] = a;
-  }
-  return out;
-}
+// The display now produces native RGBA-packed bytes in the frame buffer.
+// We can write the raw buffer directly.
 
 async function main() {
   const romPath = await assembleIfNeeded(input);
@@ -124,26 +111,25 @@ async function main() {
       continue;
     }
 
-    // frameBuf is Uint32Array — convert ARGB -> RGBA bytes
-    const rgba = argbToRgbaBuffer(frameBuf as Uint32Array);
-
-    // write raw RGBA file (native resolution)
+    // frameBuf is a Uint32Array whose underlying ArrayBuffer contains RGBA bytes
+    const rawBuf = Buffer.from((frameBuf as Uint32Array).buffer);
     const outRaw = path.join(outDir, `frame_${String(f).padStart(3,'0')}.raw`);
-    fs.writeFileSync(outRaw, rgba);
-    console.log('Wrote', outRaw, 'bytes=', rgba.length, `(${FRAME_W}x${FRAME_H})`);
+    fs.writeFileSync(outRaw, rawBuf);
+    console.log('Wrote', outRaw, 'bytes=', rawBuf.length, `(${FRAME_W}x${FRAME_H})`);
 
     // try to write PNG if pngjs is installed
     try {
       // eslint-disable-next-line @typescript-eslint/no-var-requires
       const { PNG } = require('pngjs');
       const png = new PNG({ width: FRAME_W, height: FRAME_H });
-      rgba.copy(png.data, 0, 0, rgba.length);
+      // copy raw RGBA bytes directly into png.data
+      rawBuf.copy(png.data, 0, 0, rawBuf.length);
       const outPng = path.join(outDir, `frame_${String(f).padStart(3,'0')}.png`);
       await new Promise<void>((res, rej) => {
         const ws = fs.createWriteStream(outPng);
         png.pack().pipe(ws).on('finish', () => res()).on('error', (err: any) => rej(err));
       });
-      console.log('Wrote', path.join(outDir, `frame_${String(f).padStart(3,'0')}.png`));
+      console.log('Wrote', outPng);
     } catch (e) {
       // pngjs not installed — skip silently
     }
