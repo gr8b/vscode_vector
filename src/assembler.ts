@@ -36,22 +36,61 @@ const mviOpcodes = {
 function toByte(v: string): number | null {
   if (/^0x[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(2), 16) & 0xff;
   if (/^[0-9]+$/.test(v)) return parseInt(v, 10) & 0xff;
+  // binary forms: b010101 or %0101 with optional underscores
+  if (/^b[01_]+$/i.test(v)) return parseInt(v.slice(1).replace(/_/g, ''), 2) & 0xff;
+  if (/^%[01_]+$/.test(v)) return parseInt(v.slice(1).replace(/_/g, ''), 2) & 0xff;
   return null;
 }
 
 // Parse a numeric token without masking so we can check its full width
 function parseNumberFull(v: string): number | null {
-  if (/^0x[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(2), 16);
-  if (/^\$[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(1), 16);
-  if (/^[0-9]+$/.test(v)) return parseInt(v, 10);
+  if (!v) return null;
+  const s = v.trim();
+  if (/^0x[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(2), 16);
+  if (/^\$[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(1), 16);
+  if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
+  if (/^b[01_]+$/i.test(s)) return parseInt(s.slice(1).replace(/_/g, ''), 2);
+  if (/^%[01_]+$/.test(s)) return parseInt(s.slice(1).replace(/_/g, ''), 2);
   return null;
 }
 
-function parseAddressToken(v: string, labels?: Map<string, { addr: number; line: number; src?: string }>): number | null {
-  if (/^0x[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(2), 16) & 0xffff;
-  if (/^\$[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(1), 16) & 0xffff;
-  if (/^[0-9]+$/.test(v)) return parseInt(v, 10) & 0xffff;
-  if (labels && labels.has(v)) return labels.get(v)!.addr & 0xffff;
+function parseAddressToken(v: string, labels?: Map<string, { addr: number; line: number; src?: string }>, consts?: Map<string, number>): number | null {
+  if (!v) return null;
+  const s = v.trim();
+  if (/^0x[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(2), 16) & 0xffff;
+  if (/^\$[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(1), 16) & 0xffff;
+  if (/^[0-9]+$/.test(s)) return parseInt(s, 10) & 0xffff;
+
+  // support simple arithmetic chains like "a + b - 1" where tokens can be
+  // numeric, global labels, or constants (from `consts`). This evaluates left
+  // to right; local (@) labels are not resolved here (caller should use
+  // `resolveAddressToken` which understands scope).
+  const exprParts = s.split(/\s*([+-])\s*/);
+  if (exprParts.length > 1) {
+    let acc: number | null = null;
+    for (let pi = 0; pi < exprParts.length; pi += 2) {
+      const tok = exprParts[pi].trim();
+      let val: number | null = null;
+      // numeric literal
+      val = parseNumberFull(tok);
+      if (val === null) {
+        if (consts && consts.has(tok)) val = consts.get(tok)!;
+        else if (labels && labels.has(tok)) val = labels.get(tok)!.addr;
+        else val = null;
+      }
+      if (val === null) return null;
+      if (acc === null) acc = val;
+      else {
+        const op = exprParts[pi - 1];
+        if (op === '+') acc = acc + val;
+        else acc = acc - val;
+      }
+    }
+    return (acc! & 0xffff);
+  }
+
+  if (consts && consts.has(s)) return consts.get(s)! & 0xffff;
+  if (labels && labels.has(s)) return labels.get(s)!.addr & 0xffff;
   return null;
 }
 
@@ -73,7 +112,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     const srcLines = content.split(/\r?\n/);
     for (let li = 0; li < srcLines.length; li++) {
       const raw = srcLines[li];
-      const trimmed = raw.replace(/;.*$/, '').trim();
+      const trimmed = raw.replace(/\/\/.*$|;.*$/, '').trim();
       // match .include "filename" or .include 'filename'
       const m = trimmed.match(/^\.include\s+["']([^"']+)["']/i);
       if (m) {
@@ -112,6 +151,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
   }
   const lines = expanded.lines;
   const labels = new Map<string, { addr: number; line: number; src?: string }>();
+  const consts = new Map<string, number>();
   // localsIndex: scopeKey -> (localName -> array of { key, line }) ordered by appearance
   const localsIndex = new Map<string, Map<string, Array<{ key: string; line: number }>>>();
   // global numeric id counters per local name to ensure exported keys are unique
@@ -133,7 +173,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
   // First pass: labels and address calculation
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    const line = raw.replace(/;.*$/, '').trim();
+    const line = raw.replace(/\/\/.*$|;.*$/, '').trim();
     if (!line) continue;
     // handle optional leading label (either with colon or bare before an opcode/directive)
     const tokens = line.split(/\s+/);
@@ -150,6 +190,52 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     }
     // record current scope key for this line (before any .org on this line takes effect)
     scopes[i] = getScopeKey(origins[i]);
+
+    // simple constant / EQU handling: "NAME = expr" or "NAME EQU expr"
+    if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
+      const name = tokens[0];
+      const rhs = tokens.slice(2).join(' ').trim();
+      // try numeric then label/const resolution
+      let val: number | null = parseNumberFull(rhs);
+      if (val === null) {
+        if (consts.has(rhs)) val = consts.get(rhs)!;
+        else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
+      }
+      if (val === null) {
+        errors.push(`Bad constant value '${rhs}' for ${name} at ${i + 1}`);
+      } else {
+        consts.set(name, val);
+      }
+      continue;
+    }
+    // also support forms with no whitespace tokens (e.g. "NAME=16") or explicit EQU
+    const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+    if (assignMatch) {
+      const name = assignMatch[1];
+      const rhs = assignMatch[2].trim();
+      let val: number | null = parseNumberFull(rhs);
+      if (val === null) {
+        if (consts.has(rhs)) val = consts.get(rhs)!;
+        else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
+      }
+      if (val === null) errors.push(`Bad constant value '${rhs}' for ${name} at ${i + 1}`);
+      else consts.set(name, val);
+      continue;
+    }
+    const equMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+EQU\s+(.+)$/i);
+    if (equMatch) {
+      const name = equMatch[1];
+      const rhs = equMatch[2].trim();
+      let val: number | null = parseNumberFull(rhs);
+      if (val === null) {
+        if (consts.has(rhs)) val = consts.get(rhs)!;
+        else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
+      }
+      if (val === null) errors.push(`Bad constant value '${rhs}' for ${name} at ${i + 1}`);
+      else consts.set(name, val);
+      continue;
+    }
+
 
     if (tokens[0].endsWith(':')) {
       labelHere = tokens[0].slice(0, -1);
@@ -193,8 +279,16 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     if (op === 'DB') {
       // DB value [,value]
       const rest = line.slice(2).trim();
-      const parts = rest.split(',').map(p => p.trim());
-      addr += parts.length;
+      const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      // account for multi-char quoted strings which emit multiple bytes
+      for (const p of parts) {
+        if (/^'.*'$/.test(p)) {
+          // number of bytes equals number of characters inside quotes
+          addr += Math.max(0, p.length - 2);
+        } else {
+          addr += 1;
+        }
+      }
       continue;
     }
 
@@ -353,18 +447,66 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
   // Resolve an address token in second pass: numeric, local (@) or global label
   function resolveAddressToken(arg: string, lineIndex: number): number | null {
     if (!arg) return null;
-    const num = parseNumberFull(arg);
+    const s = arg.trim();
+    // simple numeric
+    const num = parseNumberFull(s);
     if (num !== null) return num & 0xffff;
+
+    // support simple expressions like "base + 15" where base may be a
+    // numeric, a global label, or a local label (@name). RHS must be numeric.
+    const em = s.match(/^(.+?)\s*([+-])\s*(0x[0-9a-fA-F]+|\$[0-9a-fA-F]+|[0-9]+)$/);
+    if (em) {
+      // simple two-term expression fallback (handled by chained evaluator below too)
+    }
+
+    // support chained arithmetic like "a + b - 1" where any token may be a
+    // numeric, a global label, or a local label (@name). Evaluate left-to-right.
+    const exprParts = s.split(/\s*([+-])\s*/);
+    if (exprParts.length > 1) {
+      let acc: number | null = null;
+      for (let pi = 0; pi < exprParts.length; pi += 2) {
+        const tok = exprParts[pi].trim();
+        let val: number | null = null;
+        // numeric
+        val = parseNumberFull(tok);
+        if (val === null) {
+          if (tok[0] === '@') {
+            const scopeKey = scopes[lineIndex - 1];
+            const fileMap = localsIndex.get(scopeKey);
+            if (!fileMap) return null;
+            const arr = fileMap.get(tok.slice(1));
+            if (!arr || !arr.length) return null;
+            let chosen = arr[0];
+            for (const entry of arr) {
+              if ((entry.line || 0) <= lineIndex) chosen = entry;
+              else break;
+            }
+            const key = chosen.key;
+            if (labels.has(key)) val = labels.get(key)!.addr;
+            else val = null;
+          } else if (labels.has(tok)) {
+            val = labels.get(tok)!.addr;
+          } else if (consts && consts.has(tok)) {
+            val = consts.get(tok)!;
+          }
+        }
+        if (val === null) return null;
+        if (acc === null) acc = val;
+        else {
+          const op = exprParts[pi - 1];
+          acc = op === '+' ? (acc + val) : (acc - val);
+        }
+      }
+      return (acc! & 0xffff);
+    }
+
     // local label resolution based on the scope recorded during first pass
-    if (arg[0] === '@') {
+    if (s[0] === '@') {
       const scopeKey = scopes[lineIndex - 1];
       const fileMap = localsIndex.get(scopeKey);
       if (!fileMap) return null;
-      const arr = fileMap.get(arg.slice(1));
+      const arr = fileMap.get(s.slice(1));
       if (!arr || !arr.length) return null;
-      // Prefer the most-recent definition at or before this source line (supports multiple
-      // local labels with the same name in the same scope). If none are before the
-      // reference (forward reference), fall back to the first definition.
       let chosen = arr[0];
       for (const entry of arr) {
         if ((entry.line || 0) <= lineIndex) chosen = entry;
@@ -374,14 +516,15 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (labels.has(key)) return labels.get(key)!.addr & 0xffff;
       return null;
     }
-    if (labels.has(arg)) return labels.get(arg)!.addr & 0xffff;
+
+    if (labels.has(s)) return labels.get(s)!.addr & 0xffff;
     return null;
   }
 
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const srcLine = i + 1;
-    const line = raw.replace(/;.*$/, '').trim();
+    const line = raw.replace(/\/\/.*$|;.*$/, '').trim();
     if (!line) continue;
     if (/^[A-Za-z_][A-Za-z0-9_]*:$/.test(line)) continue; // label only
 
@@ -399,26 +542,42 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     map[srcLine] = addr;
 
+    // skip simple constant definitions in second pass (NAME = expr, NAME=expr or NAME EQU expr)
+    if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line) || /^[A-Za-z_][A-Za-z0-9_]*\s+EQU\b/i.test(line)) {
+      continue;
+    }
+
     const op = tokens[0].toUpperCase();
 
     if (op === 'DB') {
       const rest = line.slice(2).trim();
-      const parts = rest.split(',').map(p => p.trim());
+      const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
       for (const p of parts) {
-        let val = toByte(p);
-        if (val === null) {
-          if (/^'.'$/.test(p)) val = p.charCodeAt(1);
-          else { errors.push(`Bad DB value '${p}' at ${srcLine}`); val = 0; }
+        if (/^'.*'$/.test(p)) {
+          // multi-char string: emit each character as a byte
+          for (let k = 1; k < p.length - 1; k++) {
+            out.push(p.charCodeAt(k) & 0xff);
+            addr++;
+          }
+        } else {
+          let val = toByte(p);
+          if (val === null) {
+            errors.push(`Bad DB value '${p}' at ${srcLine}`);
+            val = 0;
+          }
+          out.push(val & 0xff);
+          addr++;
         }
-        out.push(val & 0xff);
-        addr++;
       }
       continue;
     }
 
     if (op === '.ORG' || op === 'ORG') {
       const aTok = tokens.slice(1).join(' ').trim().split(/\s+/)[0];
-      const val = parseAddressToken(aTok, labels);
+      const val = parseAddressToken(aTok, labels, consts);
       if (val === null) { errors.push(`Bad ORG address '${aTok}' at ${srcLine}`); continue; }
       addr = val;
       // label for this ORG (if present) was already registered in first pass; nothing to emit
@@ -507,7 +666,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     if (op === 'MOV') {
       // MOV D,S
-      const args = line.slice(3).trim();
+      const args = tokens.slice(1).join(' ');
       const m = args.split(',').map(s => s.trim());
       if (m.length !== 2) { errors.push(`Bad MOV syntax at ${srcLine}`); continue; }
       const d = m[0].toUpperCase();
