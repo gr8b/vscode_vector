@@ -77,7 +77,7 @@ class I8080DebugSession extends DebugSession {
   protected stackTraceRequest(response: any, args: any): void {
     const frames: StackFrame[] = [];
     if (this.emulator) {
-      const pc = this.emulator.hardware?.cpu?.state.regs.pc.pair ?? 0;
+      const pc = this.emulator.hardware?.cpu?.state.regs.pc.word ?? 0;
       const srcLine = Object.keys(this.sourceMap).find(k => this.sourceMap[parseInt(k)] === pc);
       const lineNum = srcLine ? parseInt(srcLine) : 1;
       frames.push(new StackFrame(1, 'main', new Source('program', args && args.source ? args.source.path : undefined), lineNum, 0));
@@ -110,7 +110,7 @@ class I8080DebugSession extends DebugSession {
     if (obj === 'regs' || obj === 'regsHandle' || obj === undefined) {
       if (!this.emulator || !this.emulator.hardware?.cpu?.state) { response.body = { variables }; this.sendResponse(response); return; }
       const r = this.emulator.hardware.cpu.state.regs;
-      const regs: Array<[string, number]> = [['A', r.af.a], ['B', r.bc.h], ['C', r.bc.l], ['D', r.de.h], ['E', r.de.l], ['H', r.hl.h], ['L', r.hl.l], ['PC', r.pc.pair], ['SP', r.sp.pair]];
+      const regs: Array<[string, number]> = [['A', r.af.a], ['B', r.bc.h], ['C', r.bc.l], ['D', r.de.h], ['E', r.de.l], ['H', r.hl.h], ['L', r.hl.l], ['PC', r.pc.word], ['SP', r.sp.word]];
       for (const [k, v] of regs) {
         variables.push({ name: k, value: (v ?? 0).toString(), variablesReference: 0 });
       }
@@ -128,7 +128,7 @@ class I8080DebugSession extends DebugSession {
       this.emulator.hardware?.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
     } catch (e) { /* ignore execution errors */ }
 
-    const pc = this.emulator.hardware?.cpu?.state.regs.pc.pair ?? 0;
+    const pc = this.emulator.hardware?.cpu?.state.regs.pc.word ?? 0;
     if (this.breakpoints.has(pc)) this.sendEvent(new StoppedEvent('breakpoint', 1));
     else this.sendEvent(new StoppedEvent('step', 1));
     this.sendResponse(response);
