@@ -31,6 +31,7 @@
   },
   "activationEvents": [
     "onCommand:i8080.compile",
+    "onLanguage:asm",
     "onCommand:i8080.run",
     "onCommand:i8080.pause",
     "onCommand:i8080.resume",
@@ -38,6 +39,14 @@
     "onDebug"
   ],
   "contributes": {
+    "languages": [
+      {
+        "id": "asm",
+        "extensions": [".asm"],
+        "aliases": ["ASM", "asm"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
     "commands": [
       {
         "command": "i8080.compile",
@@ -58,6 +67,18 @@
       {
         "command": "i8080.runFrame",
         "title": "Run one frame and Pause"
+      }
+      ,
+      {
+        "command": "i8080.toggleBreakpoint",
+        "title": "Toggle Breakpoint"
+      }
+    ],
+    "keybindings": [
+      {
+        "key": "f9",
+        "command": "i8080.toggleBreakpoint",
+        "when": "editorTextFocus && !editorReadonly && editorLangId == asm"
       }
     ],
     "debuggers": [
@@ -83,5 +104,15 @@
         ]
       }
     ]
+    ,
+    "menus": {
+      "editor/context": [
+        {
+          "command": "i8080.toggleBreakpoint",
+          "group": "navigation",
+          "when": "editorLangId == asm"
+        }
+      ]
+    }
   }
 }
