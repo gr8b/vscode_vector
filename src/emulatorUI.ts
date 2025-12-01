@@ -75,6 +75,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
 
   // attach debugger and sync breakpoints from the compiled token file, if available
   emu.hardware?.Request(HardwareReq.DEBUG_ATTACH, { data: true });
+  emu.hardware?.Request(HardwareReq.RUN);
+
   const appliedBreakpoints = loadBreakpointsFromToken(romPath, emu.hardware, emuOutput);
   if (appliedBreakpoints > 0) {
     try { emuOutput.appendLine(`Loaded ${appliedBreakpoints} breakpoint(s) from token file.`); } catch (e) {}
@@ -146,9 +148,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
     let running = emu.hardware?.Request(HardwareReq.IS_RUNNING)['isRunning'] ?? false;
     if (!running) {
       printDebugState('Break:', emu.hardware!, emuOutput, panel);
+      return
     }
 
-    if (!running) return;
     // schedule next frame at ~50fps
     setTimeout(tick, 1000 / 50);
   }

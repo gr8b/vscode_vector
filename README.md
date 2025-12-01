@@ -38,6 +38,8 @@ npm run compile
 node .\scripts\run-assembler.js
 ```
 
+- Compile the active `test/project/*.project.json` configuration from VS Code via the **"Compile i8080 Project"** command. The command locates the project JSON inside `test/project`, reads its `main` ASM entry, and assembles it using the same pipeline as the standard `Compile i8080 Assembly` command.
+
 - Run the external emulator (example path shown for convenience):
 
 ```pwsh

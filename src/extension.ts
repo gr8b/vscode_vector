@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { assemble, assembleAndWrite } from './assembler';
+import { assembleAndWrite } from './assembler';
 import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, runFramePanel } from './emulatorUI';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -53,20 +53,12 @@ export function activate(context: vscode.ExtensionContext) {
     }
     return out;
   }
-  const disposable = vscode.commands.registerCommand('i8080.compile', async () => {
-    const editor = vscode.window.activeTextEditor;
-    if (!editor) { vscode.window.showErrorMessage('Open an .asm file to compile'); return; }
-    const doc = editor.document;
-    if (!doc.fileName.endsWith('.asm')) { vscode.window.showWarningMessage('File does not have .asm extension, still attempting to assemble.'); }
-    const src = doc.getText();
-    // pass the document file path so assembler can resolve .include relative paths
-    const outPath = doc.fileName.replace(/\.asm$/i, '.rom');
-    // use assembleAndWrite which prints formatted errors/warnings to stderr/stdout
-    const writeRes = assembleAndWrite(src, outPath, doc.fileName);
+  async function compileAsmSource(srcPath: string, contents: string): Promise<boolean> {
+    if (!srcPath) return false;
+    const outPath = srcPath.replace(/\.asm$/i, '.rom');
+    const writeRes = assembleAndWrite(contents, outPath, srcPath);
     if (!writeRes.success) {
-      // assembleAndWrite already printed formatted errors to stderr, but keep the popup
       const errMsg = writeRes.errors ? writeRes.errors.join('; ') : 'Assemble failed';
-      // Also write the formatted errors to the Output panel so they are visible
       logOutput(`Devector: Compilation failed:\n${errMsg}`, true);
       if (writeRes.errors && writeRes.errors.length) {
         for (const e of writeRes.errors) {
@@ -74,32 +66,20 @@ export function activate(context: vscode.ExtensionContext) {
           logOutput('');
         }
       }
-      //vscode.window.showErrorMessage('Compilation failed: ' + errMsg);
-      return;
+      return false;
     }
-    // Also write success and timing info to the Output panel
     const timeMsg = (writeRes as any).timeMs !== undefined ? `${(writeRes as any).timeMs}` : '';
     logOutput(`Devector: Compilation succeeded to ${path.basename(outPath)} in ${timeMsg} ms`, true);
-    // Add tokens for editor breakpoints (source line breakpoints) across
-    // the main asm and all recursively included files. The assembler writes
-    // token file `<out>_.json`; read it, add a `breakpoints` key and write it back.
     try {
-      const includedFiles = new Set<string>(Array.from(findIncludedFiles(doc.fileName, src)));
-
-      // Build token path (same logic as in assembler.ts)
+      const includedFiles = new Set<string>(Array.from(findIncludedFiles(srcPath, contents)));
       let tokenPath: string;
       if (/\.[^/.]+$/.test(outPath)) tokenPath = outPath.replace(/\.[^/.]+$/, '_.json');
       else tokenPath = outPath + '_.json';
-
-      // If the token file exists, read and update it
       if (fs.existsSync(tokenPath)) {
         try {
           const tokenText = fs.readFileSync(tokenPath, 'utf8');
           const tokens = JSON.parse(tokenText);
-          // Clear existing breakpoints so we store the current set freshly
           tokens.breakpoints = {};
-
-          // Map included file basenames to absolute paths for matching
           const basenameToPaths = new Map<string, Set<string>>();
           for (const f of Array.from(includedFiles)) {
             const b = path.basename(f);
@@ -107,8 +87,6 @@ export function activate(context: vscode.ExtensionContext) {
             if (!s) { s = new Set(); basenameToPaths.set(b, s); }
             s.add(path.resolve(f));
           }
-
-          // Iterate all VS Code breakpoints and pick those that are in included files
           const allBps = vscode.debug.breakpoints;
           for (const bp of allBps) {
             if ((bp as vscode.SourceBreakpoint).location) {
@@ -117,20 +95,14 @@ export function activate(context: vscode.ExtensionContext) {
               if (!uri || uri.scheme !== 'file') continue;
               const bpPath = path.resolve(uri.fsPath);
               const bpBase = path.basename(bpPath);
-              // Only include if file is one of the included files
               if (!basenameToPaths.has(bpBase)) continue;
               const pathsForBase = basenameToPaths.get(bpBase)!;
               if (!pathsForBase.has(bpPath)) continue;
-
-              // Breakpoint line numbers in the token file should be 1-based
               const lineNum = srcBp.location.range.start.line + 1;
               const entry = { line: lineNum, enabled: !!bp.enabled } as any;
-
-              // Attach label and addr if matching label exists in tokens
               if (tokens.labels) {
                 for (const [labelName, labInfo] of Object.entries(tokens.labels)) {
                   try {
-                    // tokens store src as just basename in many cases
                     if ((labInfo as any).src && (labInfo as any).src === bpBase && (labInfo as any).line === lineNum) {
                       entry.label = labelName;
                       entry.addr = (labInfo as any).addr;
@@ -139,16 +111,12 @@ export function activate(context: vscode.ExtensionContext) {
                   } catch (e) {}
                 }
               }
-
               if (!tokens.breakpoints[bpBase]) tokens.breakpoints[bpBase] = [];
               tokens.breakpoints[bpBase].push(entry);
             }
           }
-
-          // Write back tokens file with the new breakpoints section
           try {
             fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 4), 'utf8');
-            // Log to Output channel how many breakpoints written for visibility
             let cnt = 0;
             for (const v of Object.values(tokens.breakpoints || {})) cnt += (v as any[]).length;
             logOutput(`Devector: Saved ${cnt} breakpoint(s) into ${tokenPath}`, true);
@@ -162,10 +130,18 @@ export function activate(context: vscode.ExtensionContext) {
     } catch (err) {
       console.error('Failed to gather editor breakpoints during compile:', err);
     }
-    //vscode.window.showInformationMessage(`Assembled to ${path.basename(outPath)}`);
+    return true;
+  }
+
+  const compileCommand = vscode.commands.registerCommand('i8080.compile', async () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) { vscode.window.showErrorMessage('Open an .asm file to compile'); return; }
+    const doc = editor.document;
+    if (!doc.fileName.endsWith('.asm')) { vscode.window.showWarningMessage('File does not have .asm extension, still attempting to assemble.'); }
+    await compileAsmSource(doc.fileName, doc.getText());
   });
 
-  context.subscriptions.push(disposable);
+  context.subscriptions.push(compileCommand);
 
   const runDisposable = vscode.commands.registerCommand('i8080.run', async () => {
     openEmulatorPanel(context);
@@ -217,6 +193,72 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
   context.subscriptions.push(createProjectDisposable);
+
+  const compileProjectDisposable = vscode.commands.registerCommand('i8080.compileProject', async () => {
+    if (!vscode.workspace.workspaceFolders || !vscode.workspace.workspaceFolders.length) {
+      vscode.window.showErrorMessage('Open a folder before compiling a project.');
+      return;
+    }
+    const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
+
+    const candidateFolders = [
+      path.join(workspaceRoot, 'test', 'project'),
+      path.join(workspaceRoot, 'project'),
+      workspaceRoot
+    ];
+
+    let projectFolder = '';
+    let projectFiles: string[] = [];
+
+    for (const candidate of candidateFolders) {
+      try {
+        const stat = fs.statSync(candidate);
+        if (!stat.isDirectory()) continue;
+        const files = fs.readdirSync(candidate).filter((f) => f.toLowerCase().endsWith('.project.json'));
+        if (files.length) {
+          projectFolder = candidate;
+          projectFiles = files;
+          break;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    if (!projectFolder) {
+      vscode.window.showErrorMessage('No *.project.json files found in test/project or the current workspace folder.');
+      return;
+    }
+    let selectedFile = projectFiles[0];
+    if (projectFiles.length > 1) {
+      const pick = await vscode.window.showQuickPick(projectFiles, { placeHolder: 'Select a project to compile' });
+      if (!pick) return;
+      selectedFile = pick;
+    }
+    const projectPath = path.join(projectFolder, selectedFile);
+    try {
+      const projectText = fs.readFileSync(projectPath, 'utf8');
+      const projectData = JSON.parse(projectText);
+      const mainEntry = projectData?.main;
+      if (!mainEntry || typeof mainEntry !== 'string') {
+        vscode.window.showErrorMessage(`${path.basename(projectPath)} is missing a "main" entry.`);
+        return;
+      }
+      const mainPath = path.isAbsolute(mainEntry) ? mainEntry : path.resolve(path.dirname(projectPath), mainEntry);
+      if (!fs.existsSync(mainPath)) {
+        vscode.window.showErrorMessage(`Main assembly file not found: ${mainPath}`);
+        return;
+      }
+      const contents = fs.readFileSync(mainPath, 'utf8');
+      const success = await compileAsmSource(mainPath, contents);
+      if (success) {
+        vscode.window.showInformationMessage(`Compiled ${path.basename(mainPath)} from ${path.basename(projectPath)}`);
+      }
+    } catch (err) {
+      vscode.window.showErrorMessage('Failed to compile project: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  });
+  context.subscriptions.push(compileProjectDisposable);
 
   // Register a debug configuration provider so the debugger is visible and
   // VS Code can present debug configurations and a F5 launch option.

@@ -1,0 +1,31 @@
+{
+    "labels": {
+        "start": {
+            "addr": "0x0100",
+            "src": "main.asm",
+            "line": 7
+        },
+        "end": {
+            "addr": "0x011D",
+            "src": "main.asm",
+            "line": 23
+        },
+        "set_palette": {
+            "addr": "0x011F",
+            "src": "main.asm",
+            "line": 29
+        },
+        "@loop_0": {
+            "addr": "0x0128",
+            "src": "main.asm",
+            "line": 35
+        },
+        "palette": {
+            "addr": "0x013B",
+            "src": "main.asm",
+            "line": 51
+        }
+    },
+    "consts": {},
+    "breakpoints": {}
+}

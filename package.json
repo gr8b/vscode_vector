@@ -36,6 +36,7 @@
     "onCommand:i8080.pause",
     "onCommand:i8080.resume",
     "onCommand:i8080.runFrame",
+    "onCommand:i8080.compileProject",
     "onCommand:i8080.createProject",
     "onDebug"
   ],
@@ -82,6 +83,10 @@
       {
         "command": "i8080.createProject",
         "title": "Create i8080 Project"
+      },
+      {
+        "command": "i8080.compileProject",
+        "title": "Compile i8080 Project"
       }
     ],
     "keybindings": [
