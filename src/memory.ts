@@ -15,43 +15,75 @@ export const MEMORY_GLOBAL_LEN = MEMORY_MAIN_LEN + MEMORY_RAMDISK_LEN * RAM_DISK
 
 export const MAPPING_MODE_MASK = 0b11110000;
 
-export type Mapping = {
-  pageRam: number;     // 0-1 bits, The index of the RAM Disk 64k page accessed in the Memory-Mapped Mode
-  pageStack: number;   // 2-3 bits, The index of the RAM Disk 64k page accessed in the Stack Mode
-  modeStack: boolean;  // 4 bit, Enables the Stack Mode
-  modeRamA: boolean;   // 5 bit, Enables the Memory-Mapped Mode with mapping for range [0xA000-0xDFFF]
-  modeRam8: boolean;   // 6 bit, Enables the Memory-Mapped Mode with mapping for range [0x8000-0x9FFF]
-  modeRamE: boolean;   // 7 bit, Enables the Memory-Mapped Mode with mapping for range [0xE000-0xFFFF]
+export class MemMapping {
+  pageRam: number = 0;     // 0-1 bits, The index of the RAM Disk 64k page accessed in the Memory-Mapped Mode
+  pageStack: number = 0;   // 2-3 bits, The index of the RAM Disk 64k page accessed in the Stack Mode
+  modeStack: boolean = false;  // 4 bit, Enables the Stack Mode
+  modeRamA: boolean = false;   // 5 bit, Enables the Memory-Mapped Mode with mapping for range [0xA000-0xDFFF]
+  modeRam8: boolean = false;   // 6 bit, Enables the Memory-Mapped Mode with mapping for range [0x8000-0x9FFF]
+  modeRamE: boolean = false;   // 7 bit, Enables the Memory-Mapped Mode with mapping for range [0xE000-0xFFFF]
+
+  get byte(): number {
+    let data = (this.pageRam) | ((this.pageStack) << 2);
+    data |= (this.modeStack ? 0b00010000 : 0);
+    data |= (this.modeRamA ? 0b00100000 : 0);
+    data |= (this.modeRam8 ? 0b01000000 : 0);
+    data |= (this.modeRamE ? 0b10000000 : 0);
+    return data;
+  }
+
+  set byte(data: number) {
+    this.pageRam = data & 0x03;
+    this.pageStack = (data >> 2) & 0x03;
+    this.modeStack = (data & 0b00010000) !== 0;
+    this.modeRamA = (data & 0b00100000) !== 0;
+    this.modeRam8 = (data & 0b01000000) !== 0;
+    this.modeRamE = (data & 0b10000000) !== 0;
+  }
+
+  Erase(): void {
+    this.pageRam = 0;
+    this.pageStack = 0;
+    this.modeStack = false;
+    this.modeRamA = false;
+    this.modeRam8 = false;
+    this.modeRamE = false;
+  }
+
+  IsRamModeEnabled(): boolean {
+    return this.modeRamA || this.modeRam8 || this.modeRamE;
+  }
 };
 
-export function PackMapping(m: Mapping): number {
-  const pageRam = m.pageRam || 0;
-  const pageStack = m.pageStack || 0;
-  let data = pageRam & 0x03;
-  data |= (pageStack & 0x03) << 2;
-  if (m.modeStack) data |= 0b00010000;
-  if (m.modeRamA) data |= 0b00100000;
-  if (m.modeRam8) data |= 0b01000000;
-  if (m.modeRamE) data |= 0b10000000;
-  return data;
-}
-export function UnpackMapping(data: number): Mapping {
-    const pageRam = (data >> 0) & 0x03;
-    const pageStack = (data >> 2) & 0x03;
-    const modeStack = (data & 0b00010000) !== 0;
-    const modeRamA = (data & 0b00100000) !== 0;
-    const modeRam8 = (data & 0b01000000) !== 0;
-    const modeRamE = (data & 0b10000000) !== 0;
-    return { pageRam, pageStack, modeStack, modeRamA, modeRam8, modeRamE };
+
+type GetGlobalAddrFuncType = (addr: number, addrSpace: AddrSpace) => number;
+
+export class Update {
+  mappings: MemMapping[] = new Array(RAM_DISK_MAX);
+  // current active mapping state
+  ramdiskIdx = 0;
+};
+
+export class MemState {
+	update: Update = new Update();
+  ram: Uint8Array | null = null;
+  GetGlobalAddrFunc: GetGlobalAddrFuncType | null = null;
+
+  constructor(_getGlobalAddrFunc: GetGlobalAddrFuncType | null,
+              ram: Uint8Array | null) {
+    this.GetGlobalAddrFunc = _getGlobalAddrFunc;
+    this.ram = ram;
+  }
 }
 
 export class Memory {
   ram: Uint8Array = new Uint8Array(MEMORY_GLOBAL_LEN);
   rom: Uint8Array = new Uint8Array(0);
-  mappings: Mapping[] = new Array(RAM_DISK_MAX);
 
-  // current active mapping state
-  ramdiskIdx = 0;
+  _state = new MemState(this.GetGlobalAddr.bind(this), this.ram);
+
+  // number of RAM Disks with mapping enabled
+  // used to detect exceptions
   mappingsEnabled = 0;
 
   memType: MemType = MemType.ROM;
@@ -67,6 +99,10 @@ export class Memory {
       }
     }
     this.ramDiskClearAfterRestart = ramDiskClearAfterRestart;
+  }
+
+  get state(): MemState {
+    return this._state;
   }
 
   Init()
@@ -89,15 +125,11 @@ export class Memory {
   }
 
   InitRamDiskMapping() {
-    this.mappings.fill({
-        modeRam8: false,
-        modeRamA: false,
-        modeRamE: false,
-        modeStack: false,
-        pageRam: 0,
-        pageStack: 0
-    });
-    this.ramdiskIdx = 0;
+    for (let mapping of this._state.update.mappings) {
+      mapping.Erase();
+    }
+
+    this._state.update.ramdiskIdx = 0;
     this.mappingsEnabled = 0;
   }
 
@@ -141,11 +173,11 @@ export class Memory {
     return val;
   }
 
-  CpuInvokesRst7()
-  {
+  // CpuInvokesRst7()
+  // {
     // TODO: fix the debug later
     // m_state.debug.instr.array[0] = 0xFF; // OPCODE_RST7
-  }
+  //}
 
   // accessed by the CPU
   // byteNum = 0 for the first byte stored by instr, 1 for the second
@@ -194,16 +226,19 @@ export class Memory {
   // Convert a 16-bit addr to a global addr depending on the ram/stack mapping modes
   GetGlobalAddr(addr: number, addrSpace: AddrSpace): number {
     addr = addr & 0xffff;
-    // if no mapping enabled, return addr
-    if (!(PackMapping(this.mappings[this.ramdiskIdx]) & MAPPING_MODE_MASK)) return addr;
+    let mapping = this._state.update.mappings;
+    let ramdiskIdx = this._state.update.ramdiskIdx;
 
-    const md = this.mappings[this.ramdiskIdx];
+    // if no mapping enabled, return addr
+    if (!(mapping[ramdiskIdx].byte & MAPPING_MODE_MASK)) return addr;
+
+    const md = mapping[ramdiskIdx];
 
     // STACK mapping
     if (md.modeStack && addrSpace === AddrSpace.STACK)
     {
-      const pageStack = this.mappings[this.ramdiskIdx].pageStack;
-      const pageIndex = pageStack + 1 + this.ramdiskIdx * 4;
+      const pageStack = mapping[ramdiskIdx].pageStack;
+      const pageIndex = pageStack + 1 + ramdiskIdx * 4;
       return pageIndex * RAM_DISK_PAGE_LEN + addr;
     }
 
@@ -212,8 +247,8 @@ export class Memory {
         (md.modeRam8 && addr >= 0x8000 && addr < 0xA000) ||
         (md.modeRamE && addr >= 0xE000))
     {
-      const pageRam = this.mappings[this.ramdiskIdx].pageRam;
-      const pageIndex = pageRam + 1 + this.ramdiskIdx * 4;
+      const pageRam = mapping[ramdiskIdx].pageRam;
+      const pageIndex = pageRam + 1 + ramdiskIdx * 4;
       return pageIndex * RAM_DISK_PAGE_LEN + addr;
     }
 
@@ -224,19 +259,19 @@ export class Memory {
   // It used the first enabled RAM Disk during an exception
   SetRamDiskMode(diskIdx: number, data: number)
   {
-    this.mappings[diskIdx] = UnpackMapping(data);
+    this._state.update.mappings[diskIdx].byte = data;
 
     // Check how many mappings are enabled
     this.mappingsEnabled = 0;
     for (let i = 0; i < RAM_DISK_MAX; i++)
     {
-      const mapping = PackMapping(this.mappings[i]);
-      if (mapping & MAPPING_MODE_MASK) {
+      const mappingByte = this._state.update.mappings[i].byte;
+      if (mappingByte & MAPPING_MODE_MASK) {
         this.mappingsEnabled++;
         if (this.mappingsEnabled > 1) {
           break;
         }
-        this.ramdiskIdx = i;
+        this._state.update.ramdiskIdx = i;
       }
     }
   }

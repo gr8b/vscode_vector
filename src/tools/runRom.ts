@@ -1,11 +1,11 @@
 #!/usr/bin/env node
+import * as os from 'os';
 import * as fs from 'fs';
 import * as path from 'path';
 import { Emulator } from '../emulator';
 import { HardwareReq } from '../hardware_reqs';
-import { State } from '../cpu_i8080';
-import * as os from 'os';
 import { assemble } from '../assembler';
+import { CpuState } from '../cpu_i8080';
 
 // Simple script to run a ROM file in the emulator until it halts or a maximum
 // number of instructions is reached. It steps through each instruction and
@@ -57,7 +57,7 @@ if (romPath.endsWith('.asm')) {
 const emu = new Emulator('', {}, romToLoad);
 
 
-function printState(state?: State) {
+function printState(state?: CpuState) {
   if (!state) {
     console.log('(no cpu state)'); return;
   }

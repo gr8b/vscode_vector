@@ -6,9 +6,9 @@ import { Hardware } from './hardware';
 import { HardwareReq } from './hardware_reqs';
 import { FRAME_H, FRAME_LEN, FRAME_W } from './display';
 import Memory, { AddrSpace } from './memory';
-import CPU, { State } from './cpu_i8080';
+import CPU, { CpuState } from './cpu_i8080';
 
-const logging = false;
+const logging = true;
 
 let currentPanelController: { pause: () => void; resume: () => void; runFrame: () => void; } | null = null;
 
@@ -72,9 +72,10 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
     }, null, context.subscriptions
   );
 
-  // start emulation loop: Vector-06C: at 3 MHz and 50Hz
-  const machineCyclesPerFrame = 59904 / 4;
   let running = true;
+
+  // attach debugger
+  emu.hardware?.Request(HardwareReq.DEBUG_ATTACH, { data: true });
 
   // expose pause/resume controls and a 'run N instructions' helper for external commands
   currentPanelController = {
@@ -91,7 +92,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
     if (logging && emu.hardware) {
       emu.hardware.debugInstructionCallback = (hw) => {
         try {
-          const line = getDebugLine(hw);
+          const line = getDebugLine(hw)
           if (debugStream && line) {
             debugStream.write(line + '\n');
           }
@@ -153,7 +154,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
   // helper: read cpu/memory state and return a compact debug object
 function getDebugState(hardware: Hardware)
 {
-  const state = hardware?.cpu?.state ?? new State();
+  const state = hardware?.cpu?.state ?? new CpuState();
   const pc = state.regs.pc.word;
   const global_addr = hardware?.memory?.GetGlobalAddr(pc, AddrSpace.RAM) ?? 0;
   const opcode = hardware?.memory?.GetByte(pc) ?? 0;

@@ -130,7 +130,7 @@ export class Int {
   eiPending: boolean = false; // if set, the interruption call is pending until the next instruction
 }
 
-export class State{
+export class CpuState{
   cc: number = 0; // clock cycles, debug related data
   regs: Registers = {
     pc: new RegPair(),
@@ -150,11 +150,11 @@ export class State{
 export default class CPU
 {
   memory?: Memory;
-  private _state: State = new State();
+  private _state: CpuState = new CpuState();
   Input?: ((port: number) => number);
   Output?: ((port: number, value: number) => void);
 
-  get state(): State {
+  get state(): CpuState {
     return this._state;
   }
 
@@ -277,7 +277,8 @@ export default class CPU
         this._state.ints.iff = false;
         this._state.ints.hlta = false;
         this._state.regs.ir.v = OPCODE_RST7;
-        this.memory?.CpuInvokesRst7();
+        // TODO: check this
+        //this.memory?.CpuInvokesRst7();
       }
       // normal instruction execution
       else

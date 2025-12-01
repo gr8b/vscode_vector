@@ -1,10 +1,10 @@
-import CPU from './cpu_i8080';
-import Memory from './memory';
+import CPU, { CpuState } from './cpu_i8080';
+import Memory, { MemState } from './memory';
 import { Keyboard } from './keyboard';
 import IO from './io';
 import { Display } from './display';
 import { HardwareReq } from './hardware_reqs';
-import { ReqData } from './hardware_types';
+import { DebugFunc, DebugReqHandlingFunc, ReqData } from './hardware_types';
 import { cp } from 'fs';
 
 enum Status {
@@ -44,6 +44,11 @@ export class Hardware
   // Optional callback invoked after each instruction is executed.
   // The callback is called from the hardware execution thread.
   debugInstructionCallback?: ((hw: Hardware) => void) | null = null;
+
+  Debug?: DebugFunc | null = null;
+  DebugReqHandling?: DebugReqHandlingFunc | null = null;
+
+  debugAttached: boolean = false;
 
   constructor(
     pathBootData: string,
@@ -170,14 +175,15 @@ export class Hardware
     }
 
     // debug per instruction
-    /*
-    // TODO: fix the debug later
-    if (this.debugAttached &&
-      this.debug?.(this.cpu.GetStateP(), this.memory.GetStateP(), this.io.GetStateP(), this._display.GetStateP()) )
-    {
-      return true;
+    try {
+      if (this.debugAttached && this.Debug && this.cpu && this.memory /*&& this.io && this._display*/)
+      {
+          const break_ = this.Debug(this.cpu.state, this.memory.state /*, this.io.state, this._display.state*/);
+          if (break_) return true;
+      }
+    } catch (e) {
+        console.error('Debug per instruction error', e);
     }
-    */
 
     if (this.memory?.IsException())
     {
@@ -500,13 +506,16 @@ export class Hardware
     case HardwareReq.RESET_UPDATE_FDD:
       m_fdc.ResetUpdate(dataJ["driveIdx"]);
       break;
-
-    case HardwareReq.DEBUG_ATTACH:
-      m_debugAttached = dataJ["data"];
-      break;
 */
+    case HardwareReq.DEBUG_ATTACH:
+      this.debugAttached = data["data"];
+      break;
+
     default:
-      //out = DebugReqHandling(req, dataJ, m_cpu.GetStateP(), m_memory.GetStateP(), m_io.GetStateP(), m_display.GetStateP());
+      if (this.DebugReqHandling && this.cpu && this.memory /*&& this.io && this._display*/){
+        out = this.DebugReqHandling(req, data, this.cpu.state, this.memory.state/*, this.io.state, this.display.state*/);
+      }
+      break;
     }
 
     return out;
@@ -767,6 +776,12 @@ export class Hardware
     return next_pc;
   }
     */
+
+  AttachDebugFuncs(debugFunc: DebugFunc , debugReqHandlingFunc: DebugReqHandlingFunc)
+  {
+    this.Debug = debugFunc;
+    this.DebugReqHandling = debugReqHandlingFunc;
+  }
 
   get display(): Display | undefined { return this._display; }
 }
