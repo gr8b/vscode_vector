@@ -5,6 +5,15 @@ import { assemble, assembleAndWrite } from './assembler';
 import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, runFramePanel } from './emulatorUI';
 
 export function activate(context: vscode.ExtensionContext) {
+  const devectorOutput = vscode.window.createOutputChannel('Devector');
+  context.subscriptions.push(devectorOutput);
+  const logOutput = (message: string, reveal: boolean = false) => {
+    try {
+      devectorOutput.appendLine(message);
+      if (reveal) devectorOutput.show(true);
+    } catch (e) { /* ignore output channel errors */ }
+  };
+
   // gather included files (resolve .include recursively)
   function findIncludedFiles(srcPath: string, content: string, out = new Set<string>(), depth = 0): Set<string> {
     if (!srcPath) return out;
@@ -48,27 +57,19 @@ export function activate(context: vscode.ExtensionContext) {
       // assembleAndWrite already printed formatted errors to stderr, but keep the popup
       const errMsg = writeRes.errors ? writeRes.errors.join('; ') : 'Assemble failed';
       // Also write the formatted errors to the Output panel so they are visible
-      try {
-        const outCh = vscode.window.createOutputChannel('Devector');
-        outCh.appendLine(`Devector: Compilation failed:\n${errMsg}`);
-        if (writeRes.errors && writeRes.errors.length) {
-          for (const e of writeRes.errors) {
-            outCh.appendLine(e);
-            outCh.appendLine('');
-          }
+      logOutput(`Devector: Compilation failed:\n${errMsg}`, true);
+      if (writeRes.errors && writeRes.errors.length) {
+        for (const e of writeRes.errors) {
+          logOutput(e);
+          logOutput('');
         }
-        outCh.show(true);
-      } catch (e) { /* ignore any output channel errors */ }
+      }
       //vscode.window.showErrorMessage('Compilation failed: ' + errMsg);
       return;
     }
     // Also write success and timing info to the Output panel
-    try {
-      const outCh = vscode.window.createOutputChannel('Devector');
-      const timeMsg = (writeRes as any).timeMs !== undefined ? `${(writeRes as any).timeMs}` : '';
-      outCh.appendLine(`Devector: Compilation succeeded to ${path.basename(outPath)} in ${timeMsg} ms`);
-      outCh.show(true);
-    } catch (e) {}
+    const timeMsg = (writeRes as any).timeMs !== undefined ? `${(writeRes as any).timeMs}` : '';
+    logOutput(`Devector: Compilation succeeded to ${path.basename(outPath)} in ${timeMsg} ms`, true);
     // Add tokens for editor breakpoints (source line breakpoints) across
     // the main asm and all recursively included files. The assembler writes
     // token file `<out>_.json`; read it, add a `breakpoints` key and write it back.
@@ -138,13 +139,9 @@ export function activate(context: vscode.ExtensionContext) {
           try {
             fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 4), 'utf8');
             // Log to Output channel how many breakpoints written for visibility
-            try {
-              const outCh2 = vscode.window.createOutputChannel('Devector');
-              let cnt = 0;
-              for (const v of Object.values(tokens.breakpoints || {})) cnt += (v as any[]).length;
-              outCh2.appendLine(`Devector: Saved ${cnt} breakpoint(s) into ${tokenPath}`);
-              outCh2.show(true);
-            } catch (e) {}
+            let cnt = 0;
+            for (const v of Object.values(tokens.breakpoints || {})) cnt += (v as any[]).length;
+            logOutput(`Devector: Saved ${cnt} breakpoint(s) into ${tokenPath}`, true);
           } catch (err) {
             console.error('Failed to write breakpoints into token file:', err);
           }
@@ -231,125 +228,119 @@ export function activate(context: vscode.ExtensionContext) {
   });
   context.subscriptions.push(toggleBp);
 
-// Intercept built-in toggle command to handle gutter clicks that toggle breakpoints
-  async function toggleBreakpointFromArg(arg: any) {
-    const outCh = vscode.window.createOutputChannel('Devector');
-    try {
-      // Determine target uri and line robustly
-      let uri: vscode.Uri | undefined;
-      let line: number | undefined;
+  // Helper utilities for breakpoint targeting
+  const looksLikeFsPath = (value: string) => {
+    return path.isAbsolute(value) || /^[a-zA-Z]:[\\/]/.test(value) || value.startsWith('\\\\');
+  };
 
-      const parseUriString = (value: string): vscode.Uri | undefined => {
-        if (!value) return undefined;
-        const looksLikePath = path.isAbsolute(value) || /^[a-zA-Z]:[\/]/.test(value) || value.startsWith('\\');
-        if (looksLikePath) {
-          try { return vscode.Uri.file(value); } catch (_) { return undefined; }
-        }
-        try { return vscode.Uri.parse(value); } catch (_) { return undefined; }
-      };
-
-      const setUri = (candidate: any) => {
-        if (!candidate || uri) return;
+  const normalizeUri = (value: any): vscode.Uri | undefined => {
+    if (!value) return undefined;
+    if (value instanceof vscode.Uri) return value;
+    if (typeof value === 'string') {
+      try {
+        return looksLikeFsPath(value) ? vscode.Uri.file(value) : vscode.Uri.parse(value);
+      } catch (_) {
+        return undefined;
+      }
+    }
+    if (typeof value === 'object') {
+      if (typeof value.fsPath === 'string') return normalizeUri(value.fsPath);
+      if (typeof value.path === 'string') {
+        if (value.scheme === 'file') return normalizeUri(value.path);
         try {
-          if (candidate instanceof vscode.Uri) {
-            uri = candidate;
-            return;
-          }
-        } catch (_) {}
-        if (typeof candidate === 'string') {
-          const parsed = parseUriString(candidate);
-          if (parsed) { uri = parsed; return; }
+          if (value.scheme) return vscode.Uri.parse(`${value.scheme}://${value.authority || ''}${value.path}`);
+        } catch (_) {
+          return undefined;
         }
-        if (candidate && typeof candidate === 'object') {
-          if ((candidate as any).fsPath || (candidate as any).path) {
-            const rawPath = (candidate as any).fsPath || (candidate as any).path;
-            const parsed = parseUriString(rawPath);
-            if (parsed) { uri = parsed; return; }
-          }
-          if ((candidate as any).scheme && (candidate as any).path !== undefined && (candidate as any).authority !== undefined) {
-            // looks like a raw Uri-like object
-            const scheme = (candidate as any).scheme;
-            if (scheme === 'file') {
-              const parsed = parseUriString((candidate as any).path as string);
-              if (parsed) { uri = parsed; return; }
-            } else {
-              try { uri = vscode.Uri.parse(`${scheme}://${(candidate as any).authority || ''}${(candidate as any).path}`); return; } catch (_) {}
-            }
-          }
-        }
-      };
+        return normalizeUri(value.path);
+      }
+      if (typeof value.scheme === 'string' && typeof value.authority === 'string' && typeof value.path === 'string') {
+        try {
+          return vscode.Uri.parse(`${value.scheme}://${value.authority}${value.path}`);
+        } catch (_) { return undefined; }
+      }
+    }
+    return undefined;
+  };
 
-      const setLine = (candidate: any, opts: { oneBased?: boolean } = {}) => {
-        if (candidate === undefined || candidate === null) return;
-        if (typeof candidate !== 'number' || isNaN(candidate)) return;
-        const normalized = opts.oneBased ? candidate - 1 : candidate;
-        if (line === undefined) line = normalized;
-      };
+  const applyLine = (current: number | undefined, raw: any, opts: { oneBased?: boolean } = {}): number | undefined => {
+    if (current !== undefined) return current;
+    if (raw === undefined || raw === null) return current;
+    const num = Number(raw);
+    if (!Number.isFinite(num)) return current;
+    const normalized = opts.oneBased ? num - 1 : num;
+    return Math.max(0, Math.floor(normalized));
+  };
 
-      const tryFromRange = (range: any) => {
-        if (!range) return;
-        if (typeof range.start?.line === 'number') {
-          setLine(range.start.line);
-          if (range.start.uri) setUri(range.start.uri);
-          return;
-        }
-        if (typeof range.startLine === 'number') {
-          setLine(range.startLine);
-          return;
-        }
-        if (typeof range.startLineNumber === 'number') {
-          setLine(range.startLineNumber, { oneBased: true });
-        }
-      };
+  const extractTargetFromArg = (arg: any): { uri?: vscode.Uri; line?: number } => {
+    let uri: vscode.Uri | undefined;
+    let line: number | undefined;
 
-      const tryFromEditor = (editorLike: any) => {
-        if (!editorLike) return;
-        const doc = editorLike.document;
-        if (doc && doc.uri) setUri(doc.uri);
-        const sel = editorLike.selection || (Array.isArray(editorLike.selections) ? editorLike.selections[0] : undefined);
-        if (sel) {
-          if (typeof sel.active?.line === 'number') setLine(sel.active.line);
-          else if (typeof sel.start?.line === 'number') setLine(sel.start.line);
+    const visit = (node: any) => {
+      if (node === undefined || node === null) return;
+      if (uri && line !== undefined) return;
+      if (Array.isArray(node)) {
+        for (const item of node) visit(item);
+        return;
+      }
+      const maybeUri = normalizeUri(node);
+      if (maybeUri && !uri) uri = maybeUri;
+      if (typeof node === 'number') {
+        line = applyLine(line, node);
+        return;
+      }
+      if (typeof node !== 'object') return;
+      const candidate = node as any;
+      if (candidate.uri) {
+        const parsed = normalizeUri(candidate.uri);
+        if (parsed && !uri) uri = parsed;
+      }
+      if (candidate.resource) {
+        const parsed = normalizeUri(candidate.resource);
+        if (parsed && !uri) uri = parsed;
+      }
+      if (candidate.document?.uri) {
+        const parsed = normalizeUri(candidate.document.uri);
+        if (parsed && !uri) uri = parsed;
+      }
+      if (candidate.source?.path) {
+        const parsed = normalizeUri(candidate.source.path);
+        if (parsed && !uri) uri = parsed;
+      }
+      if (candidate.location) {
+        const loc = candidate.location;
+        if (loc.uri) {
+          const parsed = normalizeUri(loc.uri);
+          if (parsed && !uri) uri = parsed;
         }
-      };
+        if (loc.range) visit(loc.range);
+      }
+      if (candidate.editor) visit(candidate.editor);
+      if (candidate.textEditor) visit(candidate.textEditor);
+      if (candidate.range) visit(candidate.range);
+      if (candidate.selection) visit(candidate.selection);
+      if (candidate.selections) visit(candidate.selections);
+      if (candidate.position) visit(candidate.position);
+      if (candidate.active) visit(candidate.active);
+      if (candidate.start) visit(candidate.start);
+      if (candidate.end) visit(candidate.end);
+      if (candidate.anchor) visit(candidate.anchor);
+      if (candidate.line !== undefined) line = applyLine(line, candidate.line);
+      if (candidate.lineNumber !== undefined) line = applyLine(line, candidate.lineNumber, { oneBased: true });
+      if (candidate.startLine !== undefined) line = applyLine(line, candidate.startLine);
+      if (candidate.startLineNumber !== undefined) line = applyLine(line, candidate.startLineNumber, { oneBased: true });
+      if (candidate.lineno !== undefined) line = applyLine(line, candidate.lineno, { oneBased: true });
+    };
 
-      const processCandidate = (candidate: any) => {
-        if (!candidate) return;
-        if (Array.isArray(candidate)) {
-          for (const item of candidate) processCandidate(item);
-          return;
-        }
-        setUri(candidate);
-        if ((candidate as any).uri) setUri((candidate as any).uri);
-        if ((candidate as any).location) {
-          setUri((candidate as any).location.uri);
-          tryFromRange((candidate as any).location.range);
-        }
-        if ((candidate as any).resource) setUri((candidate as any).resource);
-        if ((candidate as any).source?.path) setUri((candidate as any).source.path);
-        if ((candidate as any).document) {
-          setUri((candidate as any).document.uri);
-          tryFromEditor(candidate);
-        }
-        if ((candidate as any).textEditor) tryFromEditor((candidate as any).textEditor);
-        if ((candidate as any).editor) tryFromEditor((candidate as any).editor);
-        if ((candidate as any).range) tryFromRange((candidate as any).range);
-        if ((candidate as any).selection) {
-          const sel = (candidate as any).selection;
-          if (typeof sel.active?.line === 'number') setLine(sel.active.line);
-          else if (typeof sel.start?.line === 'number') setLine(sel.start.line);
-        }
-        if ((candidate as any).position && typeof (candidate as any).position.line === 'number') {
-          setLine((candidate as any).position.line);
-        }
-        if (typeof (candidate as any).lineNumber === 'number') setLine((candidate as any).lineNumber, { oneBased: true });
-        if (typeof (candidate as any).startLineNumber === 'number') setLine((candidate as any).startLineNumber, { oneBased: true });
-        if (typeof (candidate as any).line === 'number') setLine((candidate as any).line);
-      };
+    visit(arg);
+    return { uri, line };
+  };
 
-      processCandidate(arg);
+  // Intercept built-in toggle command to handle gutter clicks that toggle breakpoints
+  async function toggleBreakpointFromArg(arg: any) {
+    try {
+      let { uri, line } = extractTargetFromArg(arg);
 
-      // Fallback: Use Active Editor Cursor
       if (!uri || line === undefined) {
         const ed = vscode.window.activeTextEditor;
         if (ed) {
@@ -358,33 +349,30 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      if (!uri || line === undefined || line === null) {
-        outCh.appendLine('Devector: toggleBreakpoint override - missing uri/line for toggle');
+      if (!uri || line === undefined) {
+        logOutput('Devector: toggleBreakpoint override - missing uri/line for toggle');
         return;
       }
 
-      // ensure integer and non-negative
-      line = Math.max(0, Math.floor(line as number));
-
-      const existing = vscode.debug.breakpoints.filter((b) => {
-        if (!(b instanceof vscode.SourceBreakpoint)) return false;
-        const sb = b as vscode.SourceBreakpoint;
-        if (!sb.location || !sb.location.uri) return false;
-        const sbPath = sb.location.uri.fsPath;
-        return (sbPath === uri!.fsPath) && (sb.location.range.start.line === line);
+      const targetLine = Math.max(0, Math.floor(line));
+      const matching = vscode.debug.breakpoints.filter((bp) => {
+        if (!(bp instanceof vscode.SourceBreakpoint)) return false;
+        const sb = bp as vscode.SourceBreakpoint;
+        const bpUri = sb.location?.uri;
+        if (!bpUri) return false;
+        return (bpUri.fsPath === uri!.fsPath) && (sb.location.range.start.line === targetLine);
       }) as vscode.SourceBreakpoint[];
 
-      if (existing.length) {
-        vscode.debug.removeBreakpoints(existing);
-        outCh.appendLine(`Devector: Removed breakpoint at ${uri.fsPath}:${line+1}`);
+      if (matching.length) {
+        vscode.debug.removeBreakpoints(matching);
+        logOutput(`Devector: Removed breakpoint at ${uri.fsPath}:${targetLine + 1}`);
       } else {
-        const loc = new vscode.Location(uri, new vscode.Position(line, 0));
-        const sb = new vscode.SourceBreakpoint(loc, true);
-        vscode.debug.addBreakpoints([sb]);
-        outCh.appendLine(`Devector: Added breakpoint at ${uri.fsPath}:${line+1}`);
+        const newBp = new vscode.SourceBreakpoint(new vscode.Location(uri, new vscode.Position(targetLine, 0)), true);
+        vscode.debug.addBreakpoints([newBp]);
+        logOutput(`Devector: Added breakpoint at ${uri.fsPath}:${targetLine + 1}`);
       }
     } catch (e) {
-      outCh.appendLine('Devector: toggleBreakpoint override failed: ' + (e && (e as any).message ? (e as any).message : String(e)));
+      logOutput('Devector: toggleBreakpoint override failed: ' + (e instanceof Error ? e.message : String(e)));
     }
   }
 
@@ -403,11 +391,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
 
-  // CodeLens provider removed: toggling of breakpoints is now done via gutter,
-  // F9, and the 'i8080.toggleBreakpoint' command. The CodeLens option was
-  // distracting and has been removed per request.
 
-  // (No onDidExecuteCommand API in stable; command logging isn't available.)
   // Helper to write breakpoints for the active asm editor into its tokens file
   async function writeBreakpointsForActiveEditor() {
     const ed2 = vscode.window.activeTextEditor;
@@ -472,11 +456,6 @@ export function activate(context: vscode.ExtensionContext) {
     // Only write tokens if we have an active asm editor
     await writeBreakpointsForActiveEditor();
   }));
-
-  // Selection-change heuristic removed: clicking in source no longer toggles
-  // breakpoints. Gutter clicks (or F9/context menu/commands) should be used
-  // to toggle breakpoints. This prevents accidental toggles when clicking
-  // inside the text.
 }
 
 export function deactivate() {}
