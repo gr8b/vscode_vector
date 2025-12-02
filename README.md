@@ -48,6 +48,21 @@ node .\scripts\run-assembler.js
 C:\Work\Programming\devector\bin\devector.exe .\test.rom
 ```
 
+Emulator panel controls
+-----------------------
+
+Launching the VS Code emulator panel loads the ROM and shows a compact toolbar on top of the frame preview. The buttons behave like classic debugger controls:
+
+- **Run / Pause** toggles the hardware thread. While running it reads “Pause”; hitting it stops execution, captures the current frame, and switches back to “Run”.
+- **Step Over** executes a single instruction after stopping the machine (currently a simple single-instruction step without temporary breakpoints).
+- **Step Into** behaves like a classic single-instruction step, halting immediately after execution.
+- **Step Out** is a placeholder single-step today (it stops, runs one instruction, and logs that proper step-out logic is TBD).
+- **Step Frame** stops the emulator, runs one full frame with no breaks, and leaves execution paused for inspection.
+- **Step 256** runs 256 single-instruction steps in succession so you can advance through short loops faster without resuming full speed.
+- **Restart** stops the hardware, resets/restarts the ROM, reloads it into memory, and then resumes running.
+
+The Step buttons automatically disable whenever the emulator is running and re-enable when it pauses or hits a breakpoint so you cannot queue manual steps mid-run.
+
 Features and notes
 ------------------
 

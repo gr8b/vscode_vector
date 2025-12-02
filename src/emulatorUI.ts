@@ -159,6 +159,14 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         printDebugState('Run frame:', emu.hardware, emuOutput, panel);
         emitToolbarState(false);
         break;
+      case 'step256':
+        emu.hardware.Request(HardwareReq.STOP);
+        for (let i = 0; i < 256; i++) {
+          emu.hardware.Request(HardwareReq.EXECUTE_INSTR);
+        }
+        sendFrameToWebview();
+        printDebugState('Step 256:', emu.hardware, emuOutput, panel);
+        break;
       case 'restart':
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware.Request(HardwareReq.RESET);
@@ -230,6 +238,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     let running = emu.hardware?.Request(HardwareReq.IS_RUNNING)['isRunning'] ?? false;
     if (!running) {
       printDebugState('Break:', emu.hardware!, emuOutput, panel);
+      emitToolbarState(false);
       return
     }
 
@@ -360,6 +369,7 @@ function getWebviewContent() {
     <button type="button" data-action="stepOver">Step Over</button>
     <button type="button" data-action="stepInto">Step Into</button>
     <button type="button" data-action="stepOut">Step Out</button>
+    <button type="button" data-action="step256">Step 256</button>
     <button type="button" data-action="stepFrame">Step Frame</button>
     <button type="button" data-action="restart">Restart</button>
   </div>
@@ -370,7 +380,7 @@ function getWebviewContent() {
     const ctx = canvas.getContext('2d');
     const toolbar = document.querySelector('.toolbar');
     const pauseRunButton = toolbar ? toolbar.querySelector('button[data-action="pause"]') : null;
-    const stepButtonActions = ['stepOver','stepInto','stepOut','stepFrame'];
+    const stepButtonActions = ['stepOver','stepInto','stepOut','stepFrame','step256'];
 
     const setStepButtonsEnabled = (shouldEnable) => {
       if (!toolbar) return;
