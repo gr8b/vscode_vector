@@ -11,7 +11,13 @@ import CPU, { CpuState } from './cpu_i8080';
 const log_every_frame = false;
 const log_tick_to_file = false;
 
+type SourceLineRef = { file: string; line: number };
+
 let lastBreakpointSource: { romPath: string; hardware?: Hardware | null; log?: vscode.OutputChannel } | null = null;
+let lastAddressSourceMap: Map<number, SourceLineRef> | null = null;
+let highlightContext: vscode.ExtensionContext | null = null;
+let pausedLineDecoration: vscode.TextEditorDecorationType | null = null;
+let lastHighlightedEditor: vscode.TextEditor | null = null;
 
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
@@ -24,6 +30,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
   const html = getWebviewContent();
   panel.webview.html = html;
+  highlightContext = context;
+  ensureHighlightDecoration(context);
 
   // Ask user to pick a ROM file (default: workspace root test.rom)
   const candidates: vscode.Uri[] | undefined = await vscode.window.showOpenDialog({
@@ -116,6 +124,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     try {
       panel.webview.postMessage({ type: 'toolbarState', isRunning });
     } catch (e) { /* ignore toolbar sync errors */ }
+    if (isRunning) {
+      clearHighlightedSourceLine();
+    }
   };
 
   const handleDebugAction = (action?: string) => {
@@ -233,7 +244,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
     // logging
     if (log_every_frame){
-      printDebugState('hw stats:', emu.hardware!, emuOutput, panel);
+      printDebugState('hw stats:', emu.hardware!, emuOutput, panel, false);
     }
     let running = emu.hardware?.Request(HardwareReq.IS_RUNNING)['isRunning'] ?? false;
     if (!running) {
@@ -255,6 +266,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     try { if (debugStream) { debugStream.end(); } } catch (e) {}
     currentPanelController = null;
     lastBreakpointSource = null;
+    clearHighlightedSourceLine();
+    lastAddressSourceMap = null;
+    highlightContext = null;
   }, null, context.subscriptions);
 }
 
@@ -279,12 +293,16 @@ function getDebugState(hardware: Hardware)
 function printDebugState(
   header:string, hardware: Hardware,
   emuOutput: vscode.OutputChannel,
-  panel: vscode.WebviewPanel)
+  panel: vscode.WebviewPanel,
+  highlightSource: boolean = true)
 {
   const line = getDebugLine(hardware);
   try {
     emuOutput.appendLine((header ? header + ' ' : '') + line);
   } catch (e) {}
+  if (highlightSource) {
+    highlightSourceFromHardware(hardware);
+  }
 }
 
 function getDebugLine(hardware: Hardware): string {
@@ -483,6 +501,7 @@ function getWebviewContent() {
 }
 
 function loadBreakpointsFromToken(romPath: string, hardware: Hardware | undefined | null, log?: vscode.OutputChannel): number {
+  lastAddressSourceMap = null;
   if (!hardware || !romPath) return 0;
   const tokenPath = deriveTokenPath(romPath);
   if (!tokenPath || !fs.existsSync(tokenPath)) return 0;
@@ -494,6 +513,8 @@ function loadBreakpointsFromToken(romPath: string, hardware: Hardware | undefine
     try { log?.appendLine(`Failed to parse token file ${tokenPath}: ${err}`); } catch (e) {}
     return 0;
   }
+
+  lastAddressSourceMap = buildAddressToSourceMap(tokens, tokenPath);
 
   const desired = collectBreakpointAddresses(tokens);
 
@@ -634,4 +655,88 @@ function normalizeFileKey(filePath?: string): string | undefined {
 
 function formatFileLineKey(fileKey: string, line: number): string {
   return `${fileKey}#${line}`;
+}
+
+function ensureHighlightDecoration(context: vscode.ExtensionContext) {
+  if (pausedLineDecoration) return;
+  pausedLineDecoration = vscode.window.createTextEditorDecorationType({
+    isWholeLine: true,
+    backgroundColor: 'rgba(152, 251, 152, 0.45)',
+    overviewRulerColor: 'rgba(152, 251, 152, 0.8)',
+    overviewRulerLane: vscode.OverviewRulerLane.Full
+  });
+  context.subscriptions.push(pausedLineDecoration);
+}
+
+function clearHighlightedSourceLine() {
+  if (pausedLineDecoration && lastHighlightedEditor) {
+    try {
+      lastHighlightedEditor.setDecorations(pausedLineDecoration, []);
+    } catch (e) { /* ignore decoration clearing errors */ }
+  }
+  lastHighlightedEditor = null;
+}
+
+function highlightSourceFromHardware(hardware: Hardware | undefined | null) {
+  if (!hardware || !highlightContext) return;
+  try {
+    const state = getDebugState(hardware);
+    highlightSourceAddress(state.global_addr);
+  } catch (e) {
+    /* ignore highlight errors */
+  }
+}
+
+function highlightSourceAddress(addr?: number) {
+  if (!highlightContext || addr === undefined || addr === null) return;
+  ensureHighlightDecoration(highlightContext);
+  if (!pausedLineDecoration || !lastAddressSourceMap || lastAddressSourceMap.size === 0) return;
+  const info = lastAddressSourceMap.get(addr & 0xffff);
+  if (!info) return;
+  const targetPath = path.resolve(info.file);
+  const run = async () => {
+    try {
+      const uri = vscode.Uri.file(targetPath);
+      const doc = await vscode.workspace.openTextDocument(uri);
+      let editor = vscode.window.visibleTextEditors.find((ed) => ed.document.uri.fsPath === uri.fsPath);
+      if (!editor) {
+        editor = await vscode.window.showTextDocument(doc, { preview: false });
+      }
+      const totalLines = doc.lineCount;
+      if (totalLines === 0) return;
+      const idx = Math.min(Math.max(info.line - 1, 0), totalLines - 1);
+      const lineText = doc.lineAt(idx).text;
+      const range = new vscode.Range(idx, 0, idx, Math.max(lineText.length, 1));
+      clearHighlightedSourceLine();
+      editor.setDecorations(pausedLineDecoration!, [range]);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+      lastHighlightedEditor = editor;
+    } catch (err) {
+      /* ignore highlight errors */
+    }
+  };
+  void run();
+}
+
+function buildAddressToSourceMap(tokens: any, tokenPath: string): Map<number, SourceLineRef> | null {
+  if (!tokens || typeof tokens !== 'object') return null;
+  const map = new Map<number, SourceLineRef>();
+  const linesByFile = tokens.lineAddresses;
+  if (!linesByFile || typeof linesByFile !== 'object') return map;
+  const baseDir = tokenPath ? path.dirname(tokenPath) : '';
+  for (const [fileKey, perLine] of Object.entries(linesByFile as Record<string, Record<string, any>>)) {
+    if (!perLine || typeof perLine !== 'object') continue;
+    const resolvedPath = path.isAbsolute(fileKey) ? path.normalize(fileKey) : path.resolve(baseDir, fileKey);
+    for (const [lineKey, addrRaw] of Object.entries(perLine)) {
+      const addr = parseAddressLike(addrRaw);
+      if (addr === undefined) continue;
+      const lineNum = Number(lineKey);
+      if (!Number.isFinite(lineNum)) continue;
+      const normalizedAddr = addr & 0xffff;
+      if (!map.has(normalizedAddr)) {
+        map.set(normalizedAddr, { file: resolvedPath, line: lineNum });
+      }
+    }
+  }
+  return map;
 }
