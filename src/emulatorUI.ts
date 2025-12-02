@@ -22,6 +22,13 @@ let currentToolbarIsRunning = true;
 
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
+const MEMORY_DUMP_LINE_BYTES = 16;
+const MEMORY_DUMP_LINES = 16;
+const MEMORY_DUMP_TOTAL_BYTES = MEMORY_DUMP_LINE_BYTES * MEMORY_DUMP_LINES;
+const MEMORY_ADDRESS_MASK = 0xffff;
+let memoryDumpFollowPc = true;
+let memoryDumpStartAddr = 0;
+
 export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel)
 {
   const panel = vscode.window.createWebviewPanel('Devector', 'Vector-06C Emulator', vscode.ViewColumn.One, {
@@ -34,6 +41,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   highlightContext = context;
   ensureHighlightDecoration(context);
   currentToolbarIsRunning = true;
+  memoryDumpFollowPc = true;
+  memoryDumpStartAddr = 0;
 
   // Ask user to pick a ROM file (default: workspace root test.rom)
   const candidates: vscode.Uri[] | undefined = await vscode.window.showOpenDialog({
@@ -227,6 +236,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     }
   };
 
+  updateMemoryDumpFromHardware(panel, emu.hardware, 'pc');
+
   panel.webview.onDidReceiveMessage(msg => {
     if (msg && msg.type === 'key') {
       // keyboard events: forward to keyboard handling
@@ -244,6 +255,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       emitToolbarState(false);
     } else if (msg && msg.type === 'debugAction') {
       handleDebugAction(msg.action);
+    } else if (msg && msg.type === 'memoryDumpControl') {
+      handleMemoryDumpControlMessage(msg, panel, emu.hardware);
     }
   }, undefined, context.subscriptions);
 
@@ -295,6 +308,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     clearHighlightedSourceLine();
     lastAddressSourceMap = null;
     highlightContext = null;
+    memoryDumpFollowPc = true;
+    memoryDumpStartAddr = 0;
   }, null, context.subscriptions);
 }
 
@@ -328,6 +343,7 @@ function printDebugState(
   } catch (e) {}
   if (highlightSource) {
     highlightSourceFromHardware(hardware);
+    updateMemoryDumpFromHardware(panel, hardware, 'pc');
   }
 }
 
@@ -405,6 +421,19 @@ function getWebviewContent() {
     .toolbar button:hover:not(:disabled){background:#2c2c2c}
     .toolbar button:disabled{opacity:0.4;cursor:not-allowed}
     canvas{display:block;margin:16px auto;background:#111;max-width:100%;height:auto}
+    .memory-dump{background:#080808;border-top:1px solid #333;padding:8px 12px 16px;font-size:11px;color:#eee}
+    .memory-dump__header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+    .memory-dump__title{font-weight:bold;letter-spacing:0.05em;text-transform:uppercase;font-size:11px}
+    .memory-dump__header label{display:flex;align-items:center;gap:4px;font-size:11px}
+    .memory-dump__header input[type="text"]{background:#111;border:1px solid #444;color:#fff;padding:2px 4px;font-family:Consolas,monospace;font-size:11px;width:72px;text-transform:uppercase}
+    .memory-dump__header input[type="checkbox"]{accent-color:#b4ffb0}
+    .memory-dump__controls{display:flex;gap:4px;flex-wrap:wrap}
+    .memory-dump__controls button{background:#1e1e1e;border:1px solid #555;color:#fff;padding:2px 6px;border-radius:3px;font-size:10px;cursor:pointer}
+    .memory-dump__controls button:hover:not(:disabled){background:#333}
+    .memory-dump__content{background:#000;border:1px solid #333;font-family:Consolas,monospace;font-size:12px;padding:8px;overflow:auto;max-height:240px;line-height:1.4;white-space:pre-wrap}
+    .memory-dump__content .pc-row{background:rgba(180,255,176,0.12)}
+    .memory-dump__content .pc-byte{color:#000;background:#b4ffb0;padding:0 1px;border-radius:2px}
+    .memory-dump__content .addr{color:#9ad0ff;margin-right:6px;display:inline-block;width:54px}
   </style>
 </head>
 <body>
@@ -418,6 +447,21 @@ function getWebviewContent() {
     <button type="button" data-action="restart">Restart</button>
   </div>
   <canvas id="screen" width="256" height="256"></canvas>
+  <div class="memory-dump">
+    <div class="memory-dump__header">
+      <span class="memory-dump__title">Memory Dump</span>
+      <label><input type="checkbox" id="memory-follow" checked /> Follow PC</label>
+      <label>Start <input type="text" id="memory-start" value="0000" maxlength="6" spellcheck="false" /></label>
+      <div class="memory-dump__controls">
+        <button type="button" data-mem-delta="-256">-0x100</button>
+        <button type="button" data-mem-delta="-16">-0x10</button>
+        <button type="button" data-mem-delta="16">+0x10</button>
+        <button type="button" data-mem-delta="256">+0x100</button>
+        <button type="button" data-mem-action="refresh">Refresh</button>
+      </div>
+    </div>
+    <div class="memory-dump__content" id="memory-dump">Waiting for data...</div>
+  </div>
   <script>
     const vscode = acquireVsCodeApi();
     const canvas = document.getElementById('screen');
@@ -425,6 +469,12 @@ function getWebviewContent() {
     const toolbar = document.querySelector('.toolbar');
     const pauseRunButton = toolbar ? toolbar.querySelector('button[data-action="pause"]') : null;
     const stepButtonActions = ['stepOver','stepInto','stepOut','stepFrame','step256'];
+    const memoryDumpContent = document.getElementById('memory-dump');
+    const memoryFollowCheckbox = document.getElementById('memory-follow');
+    const memoryStartInput = document.getElementById('memory-start');
+    const memoryDeltaButtons = document.querySelectorAll('[data-mem-delta]');
+    const memoryRefreshButton = document.querySelector('[data-mem-action="refresh"]');
+    let memoryDumpState = { startAddr: 0, bytes: [], pc: 0, followPc: true };
 
     const setStepButtonsEnabled = (shouldEnable) => {
       if (!toolbar) return;
@@ -448,7 +498,107 @@ function getWebviewContent() {
       }
     };
 
+    const clamp16 = (value) => (Number(value) >>> 0) & 0xffff;
+    const formatAddress = (value) => clamp16(value).toString(16).toUpperCase().padStart(4, '0');
+    const formatByte = (value) => ((Number(value) >>> 0) & 0xff).toString(16).toUpperCase().padStart(2, '0');
+    const escapeHtml = (value) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const wrapPc = (text, addr) => (clamp16(addr) === clamp16(memoryDumpState.pc) ? '<span class="pc-byte">' + text + '</span>' : text);
+    const postMemoryCommand = (command, extra = {}) => {
+      vscode.postMessage({ type: 'memoryDumpControl', command, ...extra });
+    };
+    const syncMemoryControls = () => {
+      if (memoryFollowCheckbox instanceof HTMLInputElement) {
+        memoryFollowCheckbox.checked = memoryDumpState.followPc;
+      }
+      if (memoryStartInput instanceof HTMLInputElement) {
+        memoryStartInput.value = formatAddress(memoryDumpState.startAddr);
+        memoryStartInput.disabled = memoryDumpState.followPc;
+      }
+    };
+    const renderMemoryDump = () => {
+      if (!(memoryDumpContent instanceof HTMLElement)) return;
+      if (!Array.isArray(memoryDumpState.bytes) || memoryDumpState.bytes.length === 0) {
+        memoryDumpContent.textContent = memoryDumpState.followPc ? 'Waiting for data...' : 'No data';
+        return;
+      }
+      const rows = [];
+      for (let offset = 0; offset < memoryDumpState.bytes.length; offset += 16) {
+        const rowStart = clamp16(memoryDumpState.startAddr + offset);
+        const rowBytes = memoryDumpState.bytes.slice(offset, offset + 16);
+        const lineHasPc = memoryDumpState.pc >= rowStart && memoryDumpState.pc < rowStart + rowBytes.length;
+        const hexParts = rowBytes.map((value, idx) => {
+          const addr = clamp16(rowStart + idx);
+          return wrapPc(formatByte(value ?? 0), addr);
+        });
+        const asciiParts = rowBytes.map((value, idx) => {
+          const addr = clamp16(rowStart + idx);
+          const char = value >= 0x20 && value <= 0x7e ? String.fromCharCode(value) : '.';
+          return wrapPc(escapeHtml(char), addr);
+        });
+        const rowClass = 'dump-row' + (lineHasPc ? ' pc-row' : '');
+        rows.push('<div class="' + rowClass + '"><span class="addr">' + formatAddress(rowStart) + ':</span> ' + hexParts.join(' ') + '  ' + asciiParts.join('') + '</div>');
+      }
+      memoryDumpContent.innerHTML = rows.join('');
+    };
+    const updateMemoryDumpState = (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      memoryDumpState = {
+        startAddr: clamp16(payload.startAddr ?? 0),
+        bytes: Array.isArray(payload.bytes)
+          ? payload.bytes.map(value => {
+              const normalized = Number(value);
+              return Number.isFinite(normalized) ? (normalized & 0xff) : 0;
+            })
+          : [],
+        pc: clamp16(payload.pc ?? 0),
+        followPc: !!payload.followPc
+      };
+      syncMemoryControls();
+      renderMemoryDump();
+    };
+    const submitMemoryStart = () => {
+      if (!(memoryStartInput instanceof HTMLInputElement)) return;
+      const raw = memoryStartInput.value.trim();
+      if (!raw) return;
+      postMemoryCommand('setBase', { addr: raw });
+    };
+
+    syncMemoryControls();
+    renderMemoryDump();
     setStepButtonsEnabled(false);
+
+    if (memoryStartInput instanceof HTMLInputElement) {
+      memoryStartInput.addEventListener('keydown', event => {
+        if (event.key === 'Enter') {
+          submitMemoryStart();
+        }
+      });
+      memoryStartInput.addEventListener('blur', () => {
+        if (!memoryDumpState.followPc) {
+          submitMemoryStart();
+        }
+      });
+    }
+
+    if (memoryFollowCheckbox instanceof HTMLInputElement) {
+      memoryFollowCheckbox.addEventListener('change', () => {
+        postMemoryCommand('follow', { value: memoryFollowCheckbox.checked });
+      });
+    }
+
+    Array.from(memoryDeltaButtons).forEach(btn => {
+      if (!(btn instanceof HTMLButtonElement)) return;
+      btn.addEventListener('click', () => {
+        const delta = Number(btn.getAttribute('data-mem-delta'));
+        if (Number.isFinite(delta) && delta !== 0) {
+          postMemoryCommand('delta', { offset: delta });
+        }
+      });
+    });
+
+    if (memoryRefreshButton instanceof HTMLButtonElement) {
+      memoryRefreshButton.addEventListener('click', () => postMemoryCommand('refresh'));
+    }
 
     if (toolbar) {
       toolbar.addEventListener('click', event => {
@@ -505,8 +655,9 @@ function getWebviewContent() {
         } catch (e) { /* ignore malformed messages */ }
       } else if (msg.type === 'toolbarState') {
         setRunButtonState(!!msg.isRunning);
-      }
-      else if (msg.type === 'romLoaded') {
+      } else if (msg.type === 'memoryDump') {
+        updateMemoryDumpState(msg);
+      } else if (msg.type === 'romLoaded') {
         try {
           console.log('ROM loaded: ' + (msg.path || '<unknown>') + ' size=' + (msg.size || 0) + ' addr=0x' + (msg.addr !== undefined ? msg.addr.toString(16).padStart(4,'0') : '0100'));
         } catch (e) { }
@@ -521,6 +672,8 @@ function getWebviewContent() {
       vscode.postMessage({ type: 'key', kind: 'up', key: e.key, code: e.code });
       e.preventDefault();
     });
+
+    postMemoryCommand('refresh');
   </script>
 </body>
 </html>`;
@@ -761,6 +914,100 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
     }
   };
   void run();
+}
+
+function normalizeMemoryAddress(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const truncated = Math.trunc(value);
+  return ((truncated % 0x10000) + 0x10000) & MEMORY_ADDRESS_MASK;
+}
+
+function alignMemoryDumpBase(value: number): number {
+  const normalized = normalizeMemoryAddress(value);
+  return normalized & ~(MEMORY_DUMP_LINE_BYTES - 1);
+}
+
+function readMemoryChunk(memory: Memory, baseAddr: number): number[] {
+  const bytes: number[] = [];
+  for (let i = 0; i < MEMORY_DUMP_TOTAL_BYTES; i++) {
+    const addr = (baseAddr + i) & MEMORY_ADDRESS_MASK;
+    try {
+      bytes.push(memory.GetByteGlobal(addr) & 0xff);
+    } catch (e) {
+      bytes.push(0);
+    }
+  }
+  return bytes;
+}
+
+function updateMemoryDumpFromHardware(
+  panel: vscode.WebviewPanel | null,
+  hardware: Hardware | undefined | null,
+  reason: 'pc' | 'user' = 'pc',
+  explicitBase?: number
+) {
+  if (!panel || !hardware || !hardware.memory) return;
+  let nextBase = memoryDumpStartAddr;
+  if (reason === 'pc' && memoryDumpFollowPc) {
+    nextBase = hardware.cpu?.state?.regs.pc.word ?? nextBase;
+  } else if (explicitBase !== undefined) {
+    nextBase = explicitBase;
+  }
+  memoryDumpStartAddr = alignMemoryDumpBase(nextBase);
+  const bytes = readMemoryChunk(hardware.memory, memoryDumpStartAddr);
+  const pc = hardware.cpu?.state?.regs.pc.word ?? 0;
+  try {
+    panel.webview.postMessage({
+      type: 'memoryDump',
+      startAddr: memoryDumpStartAddr,
+      bytes,
+      pc,
+      followPc: memoryDumpFollowPc
+    });
+  } catch (e) {
+    /* ignore memory dump sync errors */
+  }
+}
+
+function handleMemoryDumpControlMessage(
+  msg: any,
+  panel: vscode.WebviewPanel | null,
+  hardware: Hardware | undefined | null
+) {
+  if (!panel || !hardware || !msg || typeof msg !== 'object') return;
+  const command = typeof msg.command === 'string' ? msg.command : '';
+  switch (command) {
+    case 'setBase': {
+      const parsed = parseAddressLike(msg.addr);
+      if (parsed === undefined) break;
+      memoryDumpFollowPc = false;
+      updateMemoryDumpFromHardware(panel, hardware, 'user', parsed);
+      break;
+    }
+    case 'delta': {
+      const delta = typeof msg.offset === 'number'
+        ? msg.offset
+        : typeof msg.offset === 'string'
+          ? Number.parseInt(msg.offset, 10)
+          : NaN;
+      if (!Number.isFinite(delta) || delta === 0) break;
+      memoryDumpFollowPc = false;
+      const target = (memoryDumpStartAddr + delta) & MEMORY_ADDRESS_MASK;
+      updateMemoryDumpFromHardware(panel, hardware, 'user', target);
+      break;
+    }
+    case 'follow': {
+      memoryDumpFollowPc = !!msg.value;
+      updateMemoryDumpFromHardware(panel, hardware, memoryDumpFollowPc ? 'pc' : 'user');
+      break;
+    }
+    case 'refresh': {
+      updateMemoryDumpFromHardware(panel, hardware, memoryDumpFollowPc ? 'pc' : 'user');
+      break;
+    }
+    default:
+      break;
+  }
 }
 
 function buildAddressToSourceMap(tokens: any, tokenPath: string): Map<number, SourceLineRef> | null {
