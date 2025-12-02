@@ -18,6 +18,7 @@ let lastAddressSourceMap: Map<number, SourceLineRef> | null = null;
 let highlightContext: vscode.ExtensionContext | null = null;
 let pausedLineDecoration: vscode.TextEditorDecorationType | null = null;
 let lastHighlightedEditor: vscode.TextEditor | null = null;
+let currentToolbarIsRunning = true;
 
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
@@ -32,6 +33,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   panel.webview.html = html;
   highlightContext = context;
   ensureHighlightDecoration(context);
+  currentToolbarIsRunning = true;
 
   // Ask user to pick a ROM file (default: workspace root test.rom)
   const candidates: vscode.Uri[] | undefined = await vscode.window.showOpenDialog({
@@ -120,13 +122,22 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     catch (e) { /* ignore frame conversion errors */ }
   };
 
-  const emitToolbarState = (isRunning: boolean) => {
+  const postToolbarState = (isRunning: boolean) => {
     try {
       panel.webview.postMessage({ type: 'toolbarState', isRunning });
     } catch (e) { /* ignore toolbar sync errors */ }
+  };
+
+  const emitToolbarState = (isRunning: boolean) => {
+    currentToolbarIsRunning = isRunning;
+    postToolbarState(isRunning);
     if (isRunning) {
       clearHighlightedSourceLine();
     }
+  };
+
+  const syncToolbarState = () => {
+    postToolbarState(currentToolbarIsRunning);
   };
 
   const handleDebugAction = (action?: string) => {
@@ -235,6 +246,12 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       handleDebugAction(msg.action);
     }
   }, undefined, context.subscriptions);
+
+  panel.onDidChangeViewState(() => {
+    if (panel.visible) {
+      syncToolbarState();
+    }
+  }, null, context.subscriptions);
 
   async function tick(log_every_frame: boolean = false)
   {
@@ -701,7 +718,14 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
       const doc = await vscode.workspace.openTextDocument(uri);
       let editor = vscode.window.visibleTextEditors.find((ed) => ed.document.uri.fsPath === uri.fsPath);
       if (!editor) {
-        editor = await vscode.window.showTextDocument(doc, { preview: false });
+        const existing = vscode.window.tabGroups.all.flatMap(group => group.tabs.map(tab => ({ tab, viewColumn: group.viewColumn })))
+          .find(entry => entry.tab.input && (entry.tab.input as any).uri && (entry.tab.input as any).uri.fsPath === uri.fsPath);
+        if (existing && existing.viewColumn !== undefined) {
+          editor = await vscode.window.showTextDocument(doc, { preview: false, viewColumn: existing.viewColumn, preserveFocus: false });
+        }
+      }
+      if (!editor) {
+        editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
       }
       const totalLines = doc.lineCount;
       if (totalLines === 0) return;

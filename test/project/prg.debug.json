@@ -120,9 +120,14 @@
     "breakpoints": {
         "main.asm": [
             {
-                "line": 47,
+                "line": 9,
                 "enabled": true,
-                "addr": "0x013D"
+                "addr": "0x0100"
+            },
+            {
+                "line": 22,
+                "enabled": true,
+                "addr": "0x011A"
             }
         ]
     }
