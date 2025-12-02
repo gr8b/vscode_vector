@@ -20,6 +20,11 @@ start:
 
 	  		hlt
 	  		call set_palette
+
+loop:
+			nop
+			jmp loop
+
 end:
 	  		di
 			; end of program

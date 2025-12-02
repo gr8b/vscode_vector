@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
 import { assembleAndWrite } from './assembler';
-import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, runFramePanel } from './emulatorUI';
+import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, runFramePanel, reloadEmulatorBreakpointsFromFile } from './emulatorUI';
 
 export function activate(context: vscode.ExtensionContext) {
   const devectorOutput = vscode.window.createOutputChannel('Devector');
@@ -318,6 +318,7 @@ export function activate(context: vscode.ExtensionContext) {
       if (options.notify) {
         vscode.window.showInformationMessage(`Compiled ${path.basename(info.mainPath)} to ${path.basename(romPath)}`);
       }
+      reloadEmulatorBreakpointsFromFile();
     }
     return success;
   }
@@ -385,7 +386,7 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   const runDisposable = vscode.commands.registerCommand('i8080.run', async () => {
-    openEmulatorPanel(context);
+    openEmulatorPanel(context, devectorOutput);
   });
   context.subscriptions.push(runDisposable);
 
@@ -497,7 +498,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   const runFrameDisposable = vscode.commands.registerCommand('i8080.runFrame', async () => {
     // Ensure the emulator panel is open before running instructions
-    await openEmulatorPanel(context);
+    await openEmulatorPanel(context, devectorOutput);
     // then run the instruction batch
     runFramePanel();
   });

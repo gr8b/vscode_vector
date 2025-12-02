@@ -11,9 +11,11 @@ import CPU, { CpuState } from './cpu_i8080';
 const log_every_frame = false;
 const log_tick_to_file = false;
 
+let lastBreakpointSource: { romPath: string; hardware?: Hardware | null; log?: vscode.OutputChannel } | null = null;
+
 let currentPanelController: { pause: () => void; resume: () => void; runFrame: () => void; } | null = null;
 
-export async function openEmulatorPanel(context: vscode.ExtensionContext)
+export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel)
 {
   const panel = vscode.window.createWebviewPanel('Devector', 'Vector-06C Emulator', vscode.ViewColumn.One, {
     enableScripts: true,
@@ -37,8 +39,11 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
 
 
   // Create an output channel for per-instruction logs and attach a hook
-  const emuOutput = vscode.window.createOutputChannel('Devector');
-  context.subscriptions.push(emuOutput);
+  const ownsOutputChannel = !logChannel;
+  const emuOutput = logChannel ?? vscode.window.createOutputChannel('Devector');
+  if (ownsOutputChannel) {
+    context.subscriptions.push(emuOutput);
+  }
   // Bring the output channel forward so users see logs by default
   try {
     emuOutput.show(true);
@@ -66,7 +71,11 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
     () => {
-      try { emuOutput.dispose(); }
+      try {
+        if (ownsOutputChannel) {
+          emuOutput.dispose();
+        }
+      }
       catch (e) {}
       try { if (debugStream) { debugStream.end(); } }
       catch (ee) {}
@@ -78,9 +87,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
   emu.hardware?.Request(HardwareReq.RUN);
 
   const appliedBreakpoints = loadBreakpointsFromToken(romPath, emu.hardware, emuOutput);
-  if (appliedBreakpoints > 0) {
-    try { emuOutput.appendLine(`Loaded ${appliedBreakpoints} breakpoint(s) from token file.`); } catch (e) {}
-  }
+
+  lastBreakpointSource = { romPath, hardware: emu.hardware, log: emuOutput };
 
   // expose pause/resume controls and a 'run N instructions' helper for external commands
   currentPanelController = {
@@ -162,7 +170,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext)
     try { emu.hardware?.Request(HardwareReq.EXIT); } catch (e) {}
     try { if (debugStream) { debugStream.end(); } } catch (e) {}
     currentPanelController = null;
+    lastBreakpointSource = null;
   }, null, context.subscriptions);
+}
+
+export function reloadEmulatorBreakpointsFromFile(): number {
+  if (!lastBreakpointSource) return 0;
+  return loadBreakpointsFromToken(lastBreakpointSource.romPath, lastBreakpointSource.hardware, lastBreakpointSource.log);
 }
 
 
@@ -344,9 +358,16 @@ function loadBreakpointsFromToken(romPath: string, hardware: Hardware | undefine
   }
 
   const desired = collectBreakpointAddresses(tokens);
-  if (!desired.size) return 0;
 
-  try { hardware.Request(HardwareReq.DEBUG_BREAKPOINT_DEL_ALL); } catch (e) {}
+  hardware.Request(HardwareReq.DEBUG_BREAKPOINT_DEL_ALL);
+
+  if (desired.size === 0) {
+    try {
+      log?.appendLine(`Deleted all breakpoints from ${path.basename(tokenPath)}`);
+    } catch (e) {}
+    return 0;
+  }
+
   for (const [addr, meta] of desired) {
     try { hardware.Request(HardwareReq.DEBUG_BREAKPOINT_ADD, { addr }); } catch (e) {}
     if (meta.enabled === false) {
@@ -355,7 +376,7 @@ function loadBreakpointsFromToken(romPath: string, hardware: Hardware | undefine
   }
 
   try {
-    log?.appendLine(`Applied ${desired.size} breakpoint${desired.size === 1 ? '' : 's'} from ${path.basename(tokenPath)}`);
+    log?.appendLine(`Loaded ${desired.size} breakpoint${desired.size === 1 ? '' : 's'} from ${path.basename(tokenPath)}`);
   } catch (e) {}
   return desired.size;
 }
