@@ -22,7 +22,28 @@ start:
 	  		call set_palette
 
 loop:
-			nop
+			; fill
+			lxi h, 0x80ff
+			lxi b, 0x80
+			mvi a, 0xff
+			call fill_buff
+			hlt
+			hlt
+			hlt
+			hlt
+			hlt
+
+			; erase
+			lxi h, 0x80ff
+			lxi b, 0x80
+			mvi a, 0x00
+			call fill_buff
+			hlt
+			hlt
+			hlt
+			hlt
+			hlt
+
 			jmp loop
 
 end:
@@ -54,10 +75,8 @@ set_palette: ; non-local label
 			ei
 			ret
 
-.include "inc.asm"
-
 palette:
 	  		DB b11_000_000, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, b00_000_000,
 	  		DB 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
 
-.include "r.asm"
+.include "fill_buff.asm"
