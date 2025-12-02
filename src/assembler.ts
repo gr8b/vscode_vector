@@ -1061,12 +1061,11 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
 
   // write token file (JSON) next to outPath, same base name but .json extension
   try {
-  // token file uses a postfix '_' before the extension so it's easy to
-  // distinguish (e.g. `test.rom` -> `test_.json`). If no extension,
-  // append `_.json`.
+  // token file uses a `.debug.json` suffix (e.g. `test.rom` -> `test.debug.json`).
+  // If the ROM path has no extension, append `.debug.json` verbatim.
   let tokenPath: string;
-  if (/\.[^/.]+$/.test(outPath)) tokenPath = outPath.replace(/\.[^/.]+$/, '_.json');
-  else tokenPath = outPath + '_.json';
+  if (/\.[^/.]+$/.test(outPath)) tokenPath = outPath.replace(/\.[^/.]+$/, '.debug.json');
+  else tokenPath = outPath + '.debug.json';
     const tokens: any = {
       labels: {},
       consts: {}
@@ -1078,6 +1077,20 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
           src: info.src || (sourcePath ? path.basename(sourcePath) : undefined),
           line: info.line
         };
+      }
+    }
+    tokens.lineAddresses = {};
+    if (res.map && res.origins) {
+      for (const [lineStr, addrVal] of Object.entries(res.map)) {
+        const lineIndex = parseInt(lineStr, 10);
+        if (!Number.isFinite(lineIndex) || lineIndex <= 0) continue;
+        const origin = res.origins[lineIndex - 1] as { file?: string; line: number } | undefined;
+        if (!origin || typeof origin.line !== 'number') continue;
+        const originFile = (origin.file || sourcePath);
+        if (!originFile) continue;
+        const base = path.basename(originFile).toLowerCase();
+        if (!tokens.lineAddresses[base]) tokens.lineAddresses[base] = {};
+        tokens.lineAddresses[base][origin.line] = '0x' + (addrVal & 0xffff).toString(16).toUpperCase().padStart(4, '0');
       }
     }
     fs.writeFileSync(tokenPath, JSON.stringify(tokens, null, 4), 'utf8');

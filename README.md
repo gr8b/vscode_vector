@@ -38,11 +38,30 @@ npm run compile
 node .\scripts\run-assembler.js
 ```
 
+- Compile the active `test/project/*.project.json` configuration from VS Code via the **"Compile i8080 Project"** command. The command locates the project JSON inside `test/project`, reads its `main` ASM entry, and assembles it using the same pipeline as the standard `Compile i8080 Assembly` command.
+- Project builds emit `<project-name>.rom` (and the matching `<project-name>.debug.json` tokens file) beside the `.project.json`, so the name field controls the output artifact names.
+- Adding or removing a breakpoint inside any `.asm` file automatically reruns the project compile so the ROM and breakpoint metadata stay in sync.
+
 - Run the external emulator (example path shown for convenience):
 
 ```pwsh
 C:\Work\Programming\devector\bin\devector.exe .\test.rom
 ```
+
+Emulator panel controls
+-----------------------
+
+Launching the VS Code emulator panel loads the ROM and shows a compact toolbar on top of the frame preview. The buttons behave like classic debugger controls:
+
+- **Run / Pause** toggles the hardware thread. While running it reads “Pause”; hitting it stops execution, captures the current frame, and switches back to “Run”.
+- **Step Over** executes a single instruction after stopping the machine (currently a simple single-instruction step without temporary breakpoints).
+- **Step Into** behaves like a classic single-instruction step, halting immediately after execution.
+- **Step Out** is a placeholder single-step today (it stops, runs one instruction, and logs that proper step-out logic is TBD).
+- **Step Frame** stops the emulator, runs one full frame with no breaks, and leaves execution paused for inspection.
+- **Step 256** runs 256 single-instruction steps in succession so you can advance through short loops faster without resuming full speed.
+- **Restart** stops the hardware, resets/restarts the ROM, reloads it into memory, and then resumes running.
+
+The Step buttons automatically disable whenever the emulator is running and re-enable when it pauses or hits a breakpoint so you cannot queue manual steps mid-run.
 
 Features and notes
 ------------------
@@ -54,6 +73,8 @@ Features and notes
 - Origins mapping: when using `.include`, the assembler records the original file and line for each expanded line. Errors and warnings reference the original filename and line number and print the offending source line plus a `file:///` link.
 
 - Tokens file: the assembler writes a JSON alongside the ROM (e.g., `test.json`) containing `labels` with addresses (hex), and the original `src` basename and `line` where each label was defined. This is useful for setting breakpoints by name in the emulator/debugger.
+  - Note: When compiling through the VS Code extension `i8080.compile` command, the extension also appends a `breakpoints` section to the tokens JSON that records per-file breakpoints (line numbers, enabled status, and label/addr where available) discovered in the editor across the main file and recursive includes.
+  - Breakpoints can be toggled only on meaningful lines (labels or instructions). Empty lines, pure comment lines, or lines containing compiler commands `.<cmd>` are ignored when you click the gutter or press `F9`.
 
 - Warnings for immediates/addresses: if an immediate or address exceeds the instruction width (8-bit or 16-bit), the assembler emits a warning and truncates the value to the appropriate width. These are currently non-fatal warnings.
 
