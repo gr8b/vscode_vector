@@ -29,7 +29,7 @@ export function getWebviewContent() {
     .memory-dump__controls{display:flex;gap:4px;flex-wrap:wrap}
     .memory-dump__controls button{background:#1e1e1e;border:1px solid #555;color:#fff;padding:2px 6px;border-radius:3px;font-size:10px;cursor:pointer}
     .memory-dump__controls button:hover:not(:disabled){background:#333}
-    .memory-dump__content{background:#000;border:1px solid #333;font-family:Consolas,monospace;font-size:12px;padding:8px;overflow:auto;max-height:240px;line-height:1.4;white-space:pre-wrap}
+    .memory-dump__content{background:#000;border:1px solid #333;font-family:Consolas,monospace;font-size:12px;padding:8px;line-height:1.4;white-space:pre-wrap}
     .memory-dump__content .pc-row{background:rgba(180,255,176,0.12)}
     .memory-dump__content .pc-byte{color:#000;background:#b4ffb0;padding:0 1px;border-radius:2px}
     .memory-dump__content .anchor-row{background:rgba(255,209,121,0.12)}
