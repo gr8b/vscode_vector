@@ -13,7 +13,7 @@ let hwStatsFrameCountdown = HW_STATS_FRAME_INTERVAL;
 
 const clamp16 = (value: number): number => (Number(value) >>> 0) & MEMORY_ADDRESS_MASK;
 
-type StackEntry = { offset: number; addr: number; value: number };
+type StackEntry = { offset: number; value: number };
 
 export type RamDiskMappingSnapshot = {
   idx: number;
@@ -104,7 +104,7 @@ function collectHardwareStats(hardware: Hardware | undefined | null): HardwareSt
       const addr = clamp16(cpuState.regs.sp.word + offset);
       const value = readStackWord(hardware.memory, addr);
       if (value === null) continue;
-      stackEntries.push({ offset, addr, value });
+      stackEntries.push({ offset, value });
     }
   }
 

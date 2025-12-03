@@ -95,9 +95,9 @@ export function getWebviewContent() {
       <div class="hw-stats__group-title">Stack</div>
       <table class="hw-stack-table">
         <thead>
-          <tr><th>Offset</th><th>Addr</th><th>Value</th></tr>
+          <tr><th>Offset</th><th>Value</th></tr>
         </thead>
-        <tbody id="hw-stack-body"><tr><td colspan="3">Waiting for data...</td></tr></tbody>
+        <tbody id="hw-stack-body"><tr><td colspan="2">Waiting for data...</td></tr></tbody>
       </table>
     </div>
     <div class="hw-stats__group">
@@ -325,15 +325,14 @@ export function getWebviewContent() {
       const stack = stats?.stack;
       const entries = Array.isArray(stack?.entries) ? stack.entries : [];
       if (!entries.length) {
-        hwStackBody.innerHTML = '<tr><td colspan="3">No stack data</td></tr>';
+        hwStackBody.innerHTML = '<tr><td colspan="2">No stack data</td></tr>';
         return;
       }
       hwStackBody.innerHTML = entries.map(entry => {
         const offset = formatSigned(entry.offset ?? 0);
-        const addr = formatAddressWithPrefix(entry.addr ?? 0);
         const value = formatAddressWithPrefix(entry.value ?? 0);
         const rowClass = entry.offset === 0 ? ' class="is-sp"' : '';
-        return '<tr' + rowClass + '><td>' + offset + '</td><td>' + addr + '</td><td>' + value + '</td></tr>';
+        return '<tr' + rowClass + '><td>' + offset + '</td><td>' + value + '</td></tr>';
       }).join('');
     };
     const renderHardwareMetrics = (stats) => {
