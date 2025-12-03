@@ -5,7 +5,7 @@ import * as fs from 'fs';
 import { Hardware } from './hardware';
 import { HardwareReq } from './hardware_reqs';
 import { FRAME_H, FRAME_LEN, FRAME_W } from './display';
-import Memory, { AddrSpace } from './memory';
+import Memory, { AddrSpace, MAPPING_MODE_MASK } from './memory';
 import CPU, { CpuState } from './cpu_i8080';
 
 const log_every_frame = false;
@@ -29,6 +29,11 @@ const MEMORY_ADDRESS_MASK = 0xffff;
 let memoryDumpFollowPc = true;
 let memoryDumpStartAddr = 0;
 let memoryDumpAnchorAddr = 0;
+const STACK_SAMPLE_OFFSETS = [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10];
+let hwStatsStartTime = Date.now();
+let hwStatsLastUpdate: number | null = null;
+const HW_STATS_FRAME_INTERVAL = 50;
+let hwStatsFrameCountdown = HW_STATS_FRAME_INTERVAL;
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel)
 {
@@ -42,6 +47,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   highlightContext = context;
   ensureHighlightDecoration(context);
   currentToolbarIsRunning = true;
+  hwStatsStartTime = Date.now();
+  hwStatsLastUpdate = null;
+  hwStatsFrameCountdown = 0;
   memoryDumpFollowPc = true;
   memoryDumpStartAddr = 0;
   memoryDumpAnchorAddr = 0;
@@ -125,12 +133,30 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     }
   } catch (e) { }
 
+  const sendHardwareStats = (force: boolean = false) => {
+    if (!force) {
+      hwStatsFrameCountdown--;
+      if (hwStatsFrameCountdown > 0) {
+        return;
+      }
+    }
+    hwStatsFrameCountdown = HW_STATS_FRAME_INTERVAL;
+    const snapshot = collectHardwareStats(emu.hardware);
+    if (!snapshot) return;
+    try {
+      panel.webview.postMessage(snapshot);
+    } catch (e) {
+      /* ignore stats sync errors */
+    }
+  };
+
   const sendFrameToWebview = () => {
     const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
     try {
       panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer });
     }
     catch (e) { /* ignore frame conversion errors */ }
+    sendHardwareStats();
   };
 
   const postToolbarState = (isRunning: boolean) => {
@@ -239,6 +265,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   };
 
   updateMemoryDumpFromHardware(panel, emu.hardware, 'pc');
+  sendHardwareStats(true);
 
   panel.webview.onDidReceiveMessage(msg => {
     if (msg && msg.type === 'key') {
@@ -313,6 +340,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     memoryDumpFollowPc = true;
     memoryDumpStartAddr = 0;
     memoryDumpAnchorAddr = 0;
+    hwStatsLastUpdate = null;
+    hwStatsFrameCountdown = HW_STATS_FRAME_INTERVAL;
   }, null, context.subscriptions);
 }
 
@@ -332,6 +361,191 @@ function getDebugState(hardware: Hardware)
   const byte2 = hardware?.memory?.GetByte(pc + 2) ?? 0;
   const instr_len = CPU.GetInstrLen(opcode);
   return { global_addr, state, opcode, byte1, byte2, instr_len};
+}
+
+const clamp16 = (value: number): number => (Number(value) >>> 0) & MEMORY_ADDRESS_MASK;
+
+type StackEntry = { offset: number; addr: number; value: number };
+
+type RamDiskMappingSnapshot = {
+  idx: number;
+  byte: number;
+  enabled: boolean;
+  pageRam: number;
+  pageStack: number;
+  modeStack: boolean;
+  modeRamA: boolean;
+  modeRam8: boolean;
+  modeRamE: boolean;
+};
+
+type HardwareStatsMessage = {
+  type: 'hardwareStats';
+  timestamp: number;
+  uptimeMs: number;
+  deltaMs: number;
+  regs: {
+    pc: number;
+    sp: number;
+    af: number;
+    bc: number;
+    de: number;
+    hl: number;
+    wz: number;
+    ir: number;
+    m: number | null;
+  };
+  flags: {
+    s: boolean;
+    z: boolean;
+    ac: boolean;
+    p: boolean;
+    cy: boolean;
+  };
+  stack: {
+    sp: number;
+    entries: StackEntry[];
+  };
+  hardware: {
+    cycles: number;
+    frames: number;
+    frameCc: number;
+    rasterLine: number;
+    rasterPixel: number;
+    framebufferIdx: number;
+    scrollIdx: number;
+    displayMode: string;
+    rusLat: boolean;
+    inte: boolean;
+    iff: boolean;
+    hlta: boolean;
+  };
+  peripherals: {
+    ramDisk: {
+      activeIndex: number;
+      activeMapping: RamDiskMappingSnapshot | null;
+      mappings: RamDiskMappingSnapshot[];
+    };
+    fdc: {
+      available: boolean;
+    };
+  };
+};
+
+function readStackWord(memory: Memory | undefined | null, addr: number): number | null {
+  if (!memory) return null;
+  try {
+    const base = clamp16(addr);
+    const lo = memory.GetByte(base, AddrSpace.STACK) & 0xff;
+    const hi = memory.GetByte(clamp16(base + 1), AddrSpace.STACK) & 0xff;
+    return ((hi << 8) | lo) & MEMORY_ADDRESS_MASK;
+  } catch (e) {
+    return null;
+  }
+}
+
+function collectHardwareStats(hardware: Hardware | undefined | null): HardwareStatsMessage | null {
+  if (!hardware || !hardware.cpu) return null;
+  const cpuState = hardware.cpu.state ?? new CpuState();
+  const now = Date.now();
+  const uptimeMs = Math.max(0, now - hwStatsStartTime);
+  const deltaMs = hwStatsLastUpdate ? Math.max(0, now - hwStatsLastUpdate) : 0;
+  hwStatsLastUpdate = now;
+
+  const stackEntries: StackEntry[] = [];
+  if (hardware.memory) {
+    for (const offset of STACK_SAMPLE_OFFSETS) {
+      const addr = clamp16(cpuState.regs.sp.word + offset);
+      const value = readStackWord(hardware.memory, addr);
+      if (value === null) continue;
+      stackEntries.push({ offset, addr, value });
+    }
+  }
+
+  const display = hardware.display;
+  const rasterLine = display?.rasterLine ?? 0;
+  const rasterPixel = display?.rasterPixel ?? 0;
+  const frameCc = Math.floor((rasterPixel + rasterLine * FRAME_W) / 4);
+  const framebufferIdx = display?.framebufferIdx ?? 0;
+  const scrollIdx = display?.scrollIdx ?? 0xff;
+  const frames = display?.frameNum ?? 0;
+
+  const displayMode = hardware.io ? (hardware.io.GetDisplayMode() ? '512' : '256') : '256';
+  const rusLat = hardware.io?.state?.ruslat ?? false;
+
+  const ramState = hardware.memory?.state;
+  const mappings = ramState?.update?.mappings ?? [];
+  const ramdiskIdx = ramState?.update?.ramdiskIdx ?? 0;
+  const ramDiskMappings = mappings.map((mapping, idx) => {
+    const byte = mapping.byte;
+    return {
+      idx,
+      byte,
+      enabled: (byte & MAPPING_MODE_MASK) !== 0,
+      pageRam: mapping.pageRam,
+      pageStack: mapping.pageStack,
+      modeStack: mapping.modeStack,
+      modeRamA: mapping.modeRamA,
+      modeRam8: mapping.modeRam8,
+      modeRamE: mapping.modeRamE
+    };
+  });
+
+  const hlWord = clamp16(cpuState.regs.hl.word);
+  const mByte = hardware.memory ? (hardware.memory.GetByte(hlWord, AddrSpace.RAM) & 0xff) : null;
+
+  return {
+    type: 'hardwareStats',
+    timestamp: now,
+    uptimeMs,
+    deltaMs,
+    regs: {
+      pc: clamp16(cpuState.regs.pc.word),
+      sp: clamp16(cpuState.regs.sp.word),
+      af: clamp16(cpuState.regs.af.word),
+      bc: clamp16(cpuState.regs.bc.word),
+      de: clamp16(cpuState.regs.de.word),
+      hl: hlWord,
+      wz: clamp16(cpuState.regs.wz.word),
+      ir: cpuState.regs.ir.v & 0xff,
+      m: mByte
+    },
+    flags: {
+      s: cpuState.regs.af.s,
+      z: cpuState.regs.af.z,
+      ac: cpuState.regs.af.ac,
+      p: cpuState.regs.af.p,
+      cy: cpuState.regs.af.c
+    },
+    stack: {
+      sp: clamp16(cpuState.regs.sp.word),
+      entries: stackEntries
+    },
+    hardware: {
+      cycles: hardware.cpu.cc ?? 0,
+      frames,
+      frameCc,
+      rasterLine,
+      rasterPixel,
+      framebufferIdx,
+      scrollIdx,
+      displayMode,
+      rusLat,
+      inte: cpuState.ints.inte,
+      iff: cpuState.ints.iff,
+      hlta: cpuState.ints.hlta
+    },
+    peripherals: {
+      ramDisk: {
+        activeIndex: ramdiskIdx,
+        activeMapping: ramDiskMappings[ramdiskIdx] ?? null,
+        mappings: ramDiskMappings
+      },
+      fdc: {
+        available: false
+      }
+    }
+  };
 }
 
 function printDebugState(
@@ -423,7 +637,16 @@ function getWebviewContent() {
     .toolbar button[data-toggle="run-pause"]{min-width:72px;text-align:center}
     .toolbar button:hover:not(:disabled){background:#2c2c2c}
     .toolbar button:disabled{opacity:0.4;cursor:not-allowed}
-    canvas{display:block;margin:16px auto;background:#111;max-width:100%;height:auto}
+    .display-row{display:flex;gap:16px;padding:16px;flex-wrap:wrap;align-items:flex-start;background:#050505}
+    .display-row__canvas{flex:0 0 auto;display:flex;justify-content:center;align-items:center}
+    .display-row__canvas canvas{display:block;background:#111;border:1px solid #222;max-width:100%;height:auto}
+    @media (min-width:900px){
+      .display-row__canvas canvas{max-width:512px}
+    }
+    @media (max-width:768px){
+      .display-row{flex-direction:column}
+      .display-row__canvas{width:100%}
+    }
     .memory-dump{background:#080808;border-top:1px solid #333;padding:8px 12px 16px;font-size:11px;color:#eee}
     .memory-dump__header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
     .memory-dump__title{font-weight:bold;letter-spacing:0.05em;text-transform:uppercase;font-size:11px}
@@ -441,6 +664,38 @@ function getWebviewContent() {
     .memory-dump__content .addr{color:#9ad0ff;margin-right:6px;display:inline-block;width:54px}
     .memory-dump__content .anchor-addr{color:#ffd77a}
     .memory-dump__pc-hint{font-size:11px;color:#b4ffb0;font-family:Consolas,monospace;letter-spacing:0.03em}
+    .hw-stats{background:#050505;padding:12px;border-top:1px solid #222;border-bottom:1px solid #222;display:grid;gap:12px;flex:1 1 360px;min-width:300px;max-width:420px}
+    .hw-stats__group{background:#0b0b0b;border:1px solid #1f1f1f;padding:10px;border-radius:4px}
+    .hw-stats__group-title{font-weight:bold;text-transform:uppercase;font-size:10px;letter-spacing:0.08em;color:#9ad0ff;margin-bottom:6px}
+    .hw-regs__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;font-size:12px}
+    .hw-regs__item{background:#000;padding:6px;border:1px solid #222;border-radius:3px;display:flex;justify-content:space-between;align-items:center}
+    .hw-regs__item span{color:#888;font-size:10px;text-transform:uppercase}
+    .hw-regs__item strong{font-family:Consolas,monospace;color:#fff}
+    .hw-regs__flags{margin-top:8px;display:flex;gap:4px;flex-wrap:wrap}
+    .hw-flag{border:1px solid #333;padding:2px 4px;border-radius:3px;font-size:10px;letter-spacing:0.03em;color:#888}
+    .hw-flag--on{border-color:#4caf50;color:#4caf50}
+    .hw-stack-table{width:100%;border-collapse:collapse;font-size:12px}
+    .hw-stack-table th,.hw-stack-table td{border:1px solid #1e1e1e;padding:4px 6px;text-align:left;font-family:Consolas,monospace}
+    .hw-stack-table thead th{background:#111;color:#bbb;font-size:10px;text-transform:uppercase;letter-spacing:0.08em}
+    .hw-stack-table tbody tr.is-sp{background:rgba(180,255,176,0.08)}
+    .hw-stack-table tbody tr:hover{background:rgba(154,208,255,0.08)}
+    .hw-metrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;font-size:11px}
+    .hw-metrics dt{font-size:10px;color:#999;text-transform:uppercase;letter-spacing:0.05em}
+    .hw-metrics dd{margin:0 0 4px;font-family:Consolas,monospace;color:#fff}
+    .hw-peripherals{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+    .hw-peripheral{background:#060606;border:1px solid #1c1c1c;border-radius:3px;padding:8px}
+    .hw-peripheral__title{text-transform:uppercase;font-size:10px;color:#ffd77a;margin-bottom:6px;letter-spacing:0.05em}
+    .hw-peripheral__placeholder{color:#666;font-size:11px;font-style:italic}
+    .hw-chip{border:1px solid #333;padding:2px 6px;border-radius:999px;font-size:10px;text-transform:uppercase;color:#888;display:inline-block;margin:2px 4px 2px 0}
+    .hw-chip--on{border-color:#4caf50;color:#4caf50}
+    .hw-ramdisk__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:6px;margin-bottom:6px;font-size:11px}
+    .hw-ramdisk__grid span{color:#999;font-size:10px;text-transform:uppercase;letter-spacing:0.05em}
+    .hw-ramdisk__grid strong{display:block;font-family:Consolas,monospace;color:#fff}
+    .hw-ramdisk__modes{margin-bottom:6px}
+    .hw-ramdisk__table{width:100%;border-collapse:collapse;font-size:11px}
+    .hw-ramdisk__table th,.hw-ramdisk__table td{border:1px solid #1a1a1a;padding:3px 4px;text-align:left;font-family:Consolas,monospace}
+    .hw-ramdisk__table th{background:#101010;color:#bbb;font-size:10px;text-transform:uppercase;letter-spacing:0.06em}
+    .hw-ramdisk__table tr.is-active{background:rgba(255,215,122,0.08)}
   </style>
 </head>
 <body>
@@ -453,7 +708,60 @@ function getWebviewContent() {
     <button type="button" data-action="stepFrame">Step Frame</button>
     <button type="button" data-action="restart">Restart</button>
   </div>
-  <canvas id="screen" width="256" height="256"></canvas>
+  <div class="display-row">
+    <div class="display-row__canvas">
+      <canvas id="screen" width="256" height="256"></canvas>
+    </div>
+    <div class="hw-stats">
+    <div class="hw-stats__group">
+      <div class="hw-stats__group-title">Registers</div>
+      <div id="hw-regs" class="hw-regs__grid">Waiting for data...</div>
+    </div>
+    <div class="hw-stats__group">
+      <div class="hw-stats__group-title">Stack</div>
+      <table class="hw-stack-table">
+        <thead>
+          <tr><th>Offset</th><th>Addr</th><th>Value</th></tr>
+        </thead>
+        <tbody id="hw-stack-body"><tr><td colspan="3">Waiting for data...</td></tr></tbody>
+      </table>
+    </div>
+    <div class="hw-stats__group">
+      <div class="hw-stats__group-title">Hardware</div>
+      <dl id="hw-metrics" class="hw-metrics"></dl>
+    </div>
+    <div class="hw-stats__group">
+      <div class="hw-stats__group-title">Peripherals</div>
+      <div class="hw-peripherals">
+        <div class="hw-peripheral">
+          <div class="hw-peripheral__title">RAM Disk</div>
+          <div id="hw-ramdisk">
+            <div id="hw-ramdisk-summary" class="hw-ramdisk__grid">
+              <div><span>Active</span><strong>—</strong></div>
+              <div><span>Status</span><strong>—</strong></div>
+              <div><span>RAM Page</span><strong>—</strong></div>
+              <div><span>Stack Page</span><strong>—</strong></div>
+              <div><span>Mapping Byte</span><strong>—</strong></div>
+            </div>
+            <div id="hw-ramdisk-modes" class="hw-ramdisk__modes"></div>
+            <table class="hw-ramdisk__table">
+              <thead>
+                <tr><th>Idx</th><th>Enabled</th><th>RAM</th><th>Stack</th><th>Byte</th></tr>
+              </thead>
+              <tbody id="hw-ramdisk-table-body">
+                <tr><td colspan="5">Waiting for data...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="hw-peripheral">
+          <div class="hw-peripheral__title">FDC</div>
+          <div class="hw-peripheral__placeholder">Not implemented</div>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
   <div class="memory-dump">
     <div class="memory-dump__header">
       <span class="memory-dump__title">Memory Dump</span>
@@ -483,6 +791,12 @@ function getWebviewContent() {
     const memoryDeltaButtons = document.querySelectorAll('[data-mem-delta]');
     const memoryRefreshButton = document.querySelector('[data-mem-action="refresh"]');
     const memoryPcHint = document.getElementById('memory-pc-hint');
+    const hwRegsEl = document.getElementById('hw-regs');
+    const hwStackBody = document.getElementById('hw-stack-body');
+    const hwMetricsEl = document.getElementById('hw-metrics');
+    const hwRamdiskSummary = document.getElementById('hw-ramdisk-summary');
+    const hwRamdiskModes = document.getElementById('hw-ramdisk-modes');
+    const hwRamdiskTableBody = document.getElementById('hw-ramdisk-table-body');
     const bytesPerRow = 16;
     let memoryDumpState = { startAddr: 0, anchorAddr: 0, bytes: [], pc: 0, followPc: true };
 
@@ -512,6 +826,28 @@ function getWebviewContent() {
     const formatAddress = (value) => clamp16(value).toString(16).toUpperCase().padStart(4, '0');
     const formatAddressWithPrefix = (value) => '0x' + formatAddress(value);
     const formatByte = (value) => ((Number(value) >>> 0) & 0xff).toString(16).toUpperCase().padStart(2, '0');
+    const formatSigned = (value) => {
+      if (value === 0) return '0';
+      return value > 0 ? '+' + value : value.toString();
+    };
+    const formatNumber = (value) => {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return '—';
+      return num.toLocaleString('en-US');
+    };
+    const formatDuration = (ms = 0) => {
+      if (!Number.isFinite(ms) || ms <= 0) return '0s';
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const millis = Math.floor(ms % 1000);
+      const hh = String(hours).padStart(2, '0');
+      const mm = String(minutes).padStart(2, '0');
+      const ss = String(seconds).padStart(2, '0');
+      const mmm = String(millis).padStart(3, '0');
+      return hh + ':' + mm + ':' + ss + '.' + mmm;
+    };
     const escapeHtml = (value) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const wrapByte = (text, addr) => {
       const normalized = clamp16(addr);
@@ -576,6 +912,126 @@ function getWebviewContent() {
         rows.push('<div class="' + rowClasses.join(' ') + '"><span class="' + addrClasses.join(' ') + '">' + formatAddress(rowStart) + ':</span> ' + hexParts.join(' ') + '  ' + asciiParts.join('') + '</div>');
       }
       memoryDumpContent.innerHTML = rows.join('');
+    };
+    const renderRegs = (stats) => {
+      if (!(hwRegsEl instanceof HTMLElement)) return;
+      if (!stats || !stats.regs) {
+        hwRegsEl.textContent = 'Waiting for data...';
+        return;
+      }
+      const regs = stats.regs;
+      const items = [
+        ['PC', formatAddressWithPrefix(regs.pc)],
+        ['SP', formatAddressWithPrefix(regs.sp)],
+        ['AF', formatAddressWithPrefix(regs.af)],
+        ['BC', formatAddressWithPrefix(regs.bc)],
+        ['DE', formatAddressWithPrefix(regs.de)],
+        ['HL', formatAddressWithPrefix(regs.hl)],
+        ['WZ', formatAddressWithPrefix(regs.wz)],
+        ['IR', '0x' + formatByte(regs.ir ?? 0)],
+        ['M', regs.m === null || regs.m === undefined ? '—' : '0x' + formatByte(regs.m)]
+      ];
+      hwRegsEl.innerHTML = items.map(([label, value]) => '<div class="hw-regs__item"><span>' + label + '</span><strong>' + value + '</strong></div>').join('');
+      const flags = stats.flags || {};
+      const flagOrder = [
+        { key: 's', label: 'S' },
+        { key: 'z', label: 'Z' },
+        { key: 'ac', label: 'AC' },
+        { key: 'p', label: 'P' },
+        { key: 'cy', label: 'CY' }
+      ];
+      const flagHtml = flagOrder.map(flag => '<span class="hw-flag ' + (flags[flag.key] ? 'hw-flag--on' : '') + '">' + flag.label + '</span>').join('');
+      hwRegsEl.insertAdjacentHTML('beforeend', '<div class="hw-regs__flags" title="Flags">' + flagHtml + '</div>');
+    };
+    const renderStack = (stats) => {
+      if (!(hwStackBody instanceof HTMLElement)) return;
+      const stack = stats?.stack;
+      const entries = Array.isArray(stack?.entries) ? stack.entries : [];
+      if (!entries.length) {
+        hwStackBody.innerHTML = '<tr><td colspan="3">No stack data</td></tr>';
+        return;
+      }
+      hwStackBody.innerHTML = entries.map(entry => {
+        const offset = formatSigned(entry.offset ?? 0);
+        const addr = formatAddressWithPrefix(entry.addr ?? 0);
+        const value = formatAddressWithPrefix(entry.value ?? 0);
+        const rowClass = entry.offset === 0 ? ' class="is-sp"' : '';
+        return '<tr' + rowClass + '><td>' + offset + '</td><td>' + addr + '</td><td>' + value + '</td></tr>';
+      }).join('');
+    };
+    const renderHardwareMetrics = (stats) => {
+      if (!(hwMetricsEl instanceof HTMLElement)) return;
+      const hw = stats?.hardware;
+      if (!hw) {
+        hwMetricsEl.textContent = 'Waiting for data...';
+        return;
+      }
+      const metrics = [
+        ['Up Time', formatDuration(stats?.uptimeMs ?? 0)],
+        ['Δ Update', (stats?.deltaMs ?? 0) > 0 ? Math.round(stats.deltaMs) + ' ms' : '—'],
+        ['CPU Cycles', formatNumber(hw.cycles)],
+        ['Frames', formatNumber(hw.frames)],
+        ['Frame CC', formatNumber(hw.frameCc)],
+        ['Raster', hw.rasterLine + ':' + hw.rasterPixel],
+        ['Scroll', '0x' + formatByte(hw.scrollIdx ?? 0)],
+        ['Display', hw.displayMode + ' px'],
+        ['Rus/Lat', hw.rusLat ? 'LAT' : 'RUS'],
+        ['INT', hw.inte ? 'Enabled' : 'Disabled'],
+        ['IFF', hw.iff ? 'Pending' : 'Idle'],
+        ['HLT', hw.hlta ? 'HLT' : 'RUN']
+      ];
+      hwMetricsEl.innerHTML = metrics.map(([label, value]) => '<dt>' + label + '</dt><dd>' + value + '</dd>').join('');
+    };
+    const renderRamDisk = (stats) => {
+      if (!(hwRamdiskSummary instanceof HTMLElement) || !(hwRamdiskTableBody instanceof HTMLElement)) return;
+      const ramDisk = stats?.peripherals?.ramDisk;
+      if (!ramDisk) {
+        hwRamdiskSummary.innerHTML = '<div><span>Active</span><strong>—</strong></div>';
+        if (hwRamdiskModes instanceof HTMLElement) {
+          hwRamdiskModes.innerHTML = '';
+        }
+        hwRamdiskTableBody.innerHTML = '<tr><td colspan="5">No RAM Disk info</td></tr>';
+        return;
+      }
+      const active = ramDisk.activeMapping;
+      const summaryItems = [
+        { label: 'Active', value: ramDisk.activeIndex !== undefined ? '#' + ramDisk.activeIndex : '—' },
+        { label: 'Status', value: active ? (active.enabled ? 'Enabled' : 'Disabled') : '—' },
+        { label: 'RAM Page', value: active && active.pageRam !== undefined ? active.pageRam.toString() : '—' },
+        { label: 'Stack Page', value: active && active.pageStack !== undefined ? active.pageStack.toString() : '—' },
+        { label: 'Mapping Byte', value: active ? '0x' + formatByte(active.byte) : '—' }
+      ];
+      hwRamdiskSummary.innerHTML = summaryItems.map(item => '<div><span>' + item.label + '</span><strong>' + item.value + '</strong></div>').join('');
+      if (hwRamdiskModes instanceof HTMLElement) {
+        if (active) {
+          const chips = [
+            { label: 'Stack', enabled: active.modeStack },
+            { label: '0x8000', enabled: active.modeRam8 },
+            { label: '0xA000', enabled: active.modeRamA },
+            { label: '0xE000', enabled: active.modeRamE }
+          ];
+          hwRamdiskModes.innerHTML = chips.map(chip => '<span class="hw-chip ' + (chip.enabled ? 'hw-chip--on' : '') + '">' + chip.label + '</span>').join('');
+        } else {
+          hwRamdiskModes.innerHTML = '<span class="hw-chip">No mapping</span>';
+        }
+      }
+      const mappings = Array.isArray(ramDisk.mappings) ? ramDisk.mappings : [];
+      if (!mappings.length) {
+        hwRamdiskTableBody.innerHTML = '<tr><td colspan="5">No mappings</td></tr>';
+        return;
+      }
+      hwRamdiskTableBody.innerHTML = mappings.map(mapping => {
+        const rowClass = mapping.idx === ramDisk.activeIndex ? ' class="is-active"' : '';
+        const enabled = mapping.enabled ? 'ON' : 'OFF';
+        return '<tr' + rowClass + '><td>' + mapping.idx + '</td><td>' + enabled + '</td><td>' + mapping.pageRam + '</td><td>' + mapping.pageStack + '</td><td>0x' + formatByte(mapping.byte) + '</td></tr>';
+      }).join('');
+    };
+    const renderHardwareStats = (stats) => {
+      if (!stats) return;
+      renderRegs(stats);
+      renderStack(stats);
+      renderHardwareMetrics(stats);
+      renderRamDisk(stats);
     };
     const updateMemoryDumpState = (payload) => {
       if (!payload || typeof payload !== 'object') return;
@@ -707,6 +1163,8 @@ function getWebviewContent() {
         setRunButtonState(!!msg.isRunning);
       } else if (msg.type === 'memoryDump') {
         updateMemoryDumpState(msg);
+      } else if (msg.type === 'hardwareStats') {
+        renderHardwareStats(msg);
       } else if (msg.type === 'romLoaded') {
         try {
           console.log('ROM loaded: ' + (msg.path || '<unknown>') + ' size=' + (msg.size || 0) + ' addr=0x' + (msg.addr !== undefined ? msg.addr.toString(16).padStart(4,'0') : '0100'));
