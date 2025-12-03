@@ -19,6 +19,7 @@ export function getWebviewContent() {
     }
     .hw-stats{display:flex;flex-wrap:wrap;gap:12px;background:#050505;border-top:1px solid #222;border-bottom:1px solid #222;padding:12px}
     .hw-stats__group{flex:1 1 220px;background:#0b0b0b;border:1px solid #1f1f1f;padding:10px;border-radius:4px}
+    .hw-stats__group--narrow{flex:0 0 75px;max-width:130px}
     .memory-dump{background:#080808;border-top:1px solid #333;padding:8px 12px 16px;font-size:11px;color:#eee}
     .memory-dump__header{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
     .memory-dump__title{font-weight:bold;letter-spacing:0.05em;text-transform:uppercase;font-size:11px}
@@ -37,11 +38,11 @@ export function getWebviewContent() {
     .memory-dump__content .anchor-addr{color:#ffd77a}
     .memory-dump__pc-hint{font-size:11px;color:#b4ffb0;font-family:Consolas,monospace;letter-spacing:0.03em}
     .hw-stats__group-title{font-weight:bold;text-transform:uppercase;font-size:10px;letter-spacing:0.08em;color:#9ad0ff;margin-bottom:6px}
-    .hw-regs__grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:6px;font-size:12px}
+    .hw-regs__grid{display:flex;flex-direction:column;gap:6px;font-size:12px}
     .hw-regs__item{background:#000;padding:6px;border:1px solid #222;border-radius:3px;display:flex;justify-content:space-between;align-items:center}
     .hw-regs__item span{color:#888;font-size:10px;text-transform:uppercase}
     .hw-regs__item strong{font-family:Consolas,monospace;color:#fff}
-    .hw-regs__flags{margin-top:8px;display:flex;gap:4px;flex-wrap:wrap}
+    .hw-regs__flags{margin-bottom:8px;display:flex;gap:4px;flex-wrap:wrap}
     .hw-flag{border:1px solid #333;padding:2px 4px;border-radius:3px;font-size:10px;letter-spacing:0.03em;color:#888}
     .hw-flag--on{border-color:#4caf50;color:#4caf50}
     .hw-stack-table{width:100%;border-collapse:collapse;font-size:12px}
@@ -87,7 +88,7 @@ export function getWebviewContent() {
       <canvas id="screen" width="256" height="256"></canvas>
     </div>
     <div class="hw-stats">
-    <div class="hw-stats__group">
+    <div class="hw-stats__group hw-stats__group--narrow">
       <div class="hw-stats__group-title">Registers</div>
       <div id="hw-regs" class="hw-regs__grid">Waiting for data...</div>
     </div>
@@ -299,16 +300,6 @@ export function getWebviewContent() {
         return;
       }
       const regs = stats.regs;
-      const items = [
-        ['PC', formatAddressWithPrefix(regs.pc)],
-        ['SP', formatAddressWithPrefix(regs.sp)],
-        ['AF', formatAddressWithPrefix(regs.af)],
-        ['BC', formatAddressWithPrefix(regs.bc)],
-        ['DE', formatAddressWithPrefix(regs.de)],
-        ['HL', formatAddressWithPrefix(regs.hl)],
-        ['M', regs.m === null || regs.m === undefined ? '—' : '0x' + formatByte(regs.m)]
-      ];
-      hwRegsEl.innerHTML = items.map(([label, value]) => '<div class="hw-regs__item"><span>' + label + '</span><strong>' + value + '</strong></div>').join('');
       const flags = stats.flags || {};
       const flagOrder = [
         { key: 's', label: 'S' },
@@ -318,7 +309,17 @@ export function getWebviewContent() {
         { key: 'cy', label: 'CY' }
       ];
       const flagHtml = flagOrder.map(flag => '<span class="hw-flag ' + (flags[flag.key] ? 'hw-flag--on' : '') + '">' + flag.label + '</span>').join('');
-      hwRegsEl.insertAdjacentHTML('beforeend', '<div class="hw-regs__flags" title="Flags">' + flagHtml + '</div>');
+      const bodyItems = [
+        ['AF', formatAddressWithPrefix(regs.af)],
+        ['BC', formatAddressWithPrefix(regs.bc)],
+        ['DE', formatAddressWithPrefix(regs.de)],
+        ['HL', formatAddressWithPrefix(regs.hl)],
+        ['SP', formatAddressWithPrefix(regs.sp)],
+        ['PC', formatAddressWithPrefix(regs.pc)],
+        ['M', regs.m === null || regs.m === undefined ? '—' : '0x' + formatByte(regs.m)]
+      ];
+      const bodyHtml = bodyItems.map(([label, value]) => '<div class="hw-regs__item"><span>' + label + '</span><strong>' + value + '</strong></div>').join('');
+      hwRegsEl.innerHTML = '<div class="hw-regs__flags" title="Flags">' + flagHtml + '</div>' + bodyHtml;
     };
     const renderStack = (stats) => {
       if (!(hwStackBody instanceof HTMLElement)) return;
