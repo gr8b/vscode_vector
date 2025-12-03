@@ -22,27 +22,9 @@ start:
 	  		call set_palette
 
 loop:
-			; fill
-			lxi h, 0x80ff
-			lxi b, 0x80
-			mvi a, 0xff
-			call fill_buff
-			hlt
-			hlt
-			hlt
-			hlt
-			hlt
+			Fill(0xFF)
 
-			; erase
-			lxi h, 0x80ff
-			lxi b, 0x80
-			mvi a, 0x00
-			call fill_buff
-			hlt
-			hlt
-			hlt
-			hlt
-			hlt
+			Fill(0x80)
 
 			jmp loop
 
@@ -50,6 +32,20 @@ end:
 	  		di
 			; end of program
 	  		hlt
+
+
+.macro Fill(value)
+			lxi h, 0x80ff
+			lxi b, 0x80
+			mvi a, value
+			call fill_buff
+			hlt
+			hlt
+			hlt
+			hlt
+			hlt
+.endm
+
 
 PALETTE_LEN = 16
 set_palette: ; non-local label

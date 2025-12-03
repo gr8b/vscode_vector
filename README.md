@@ -84,6 +84,30 @@ Features and notes
 - Warnings for immediates/addresses: if an immediate or address exceeds the instruction width (8-bit or 16-bit), the assembler emits a warning and truncates the value to the appropriate width. These are currently non-fatal warnings.
 
 - Diagnostics: invalid mnemonics or bad operands are reported as errors with file/line and the offending source text. The assembler rejects invalid operations such as `MOV M,M`.
+- `.macro` / `.endmacro`: build parameterized macros (with defaults, nested calls, and per-invocation label namespaces) that expand inline before assembly.
+
+Macros
+------
+
+Use `.macro Name(param=default, otherParam, optional=$10)` to define reusable code blocks. A macro's body is copied inline wherever you invoke `Name(...)`, and all parameters are substituted as plain text before the normal two-pass assembly runs. Parameters that are omitted during a call fall back to their default value; if you skip both an argument and a default, the assembler injects `0` (matching the original toolchain behaviour).
+
+Each macro call receives its own namespace for "normal" (`Label:`) and local (`@loop`) labels, so you can safely reuse throwaway labels inside macros or even call a macro recursively. Normal labels defined inside the macro are exported as `MacroName_<call-index>.Label`, letting you jump back into generated code for debugging tricks:
+
+```
+.macro SetColors(Background=$06, Border=$0e, Addr)
+  lda #Background
+  sta $d021
+  lda #Border
+  sta $d020
+AddrPtr ldx Addr
+  stx $3300
+.endmacro
+
+SetColors($0b, $0f, PalettePtr)
+SetColors(, MyColor+1, $0000) ; Background uses the default $06
+```
+
+Nested macros are supported (up to 32 levels deep), but you cannot open another `.macro` inside a macro body. All macro lines keep their original file/line metadata, so assembler errors still point back to the macro definition.
 
 Extending the workflow
 ----------------------
