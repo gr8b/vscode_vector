@@ -154,13 +154,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     }
   };
 
-  const sendFrameToWebview = () => {
+  const sendFrameToWebview = (forceStats: boolean = false) => {
     const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
     try {
       panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer });
     }
     catch (e) { /* ignore frame conversion errors */ }
-    sendHardwareStats();
+    sendHardwareStats(forceStats);
   };
 
   const postToolbarState = (isRunning: boolean) => {
@@ -186,7 +186,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     switch (action) {
       case 'pause':
         emu.hardware.Request(HardwareReq.STOP);
-        sendFrameToWebview();
+        sendFrameToWebview(true);
         printDebugState('Pause:', emu.hardware, emuOutput, panel);
         emitToolbarState(false);
         break;
@@ -198,27 +198,27 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       case 'stepInto':
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
-        sendFrameToWebview();
+        sendFrameToWebview(true);
         printDebugState('Step into:', emu.hardware, emuOutput, panel);
         break;
       case 'stepOver':
         emu.hardware.Request(HardwareReq.STOP);
         // TODO: implement proper step over by setting a temporary breakpoint after the CALL/RET
         emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
-        sendFrameToWebview();
+        sendFrameToWebview(true);
         printDebugState('Step over (NOT IMPLEMENTED):', emu.hardware, emuOutput, panel);
         break;
       case 'stepOut':
         emu.hardware.Request(HardwareReq.STOP);
         // TODO: implement proper step out
         emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
-        sendFrameToWebview();
+        sendFrameToWebview(true);
         printDebugState('Step out (NOT IMPLEMENTED):', emu.hardware, emuOutput, panel);
         break;
       case 'stepFrame':
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
-        sendFrameToWebview();
+        sendFrameToWebview(true);
         printDebugState('Run frame:', emu.hardware, emuOutput, panel);
         emitToolbarState(false);
         break;
@@ -227,7 +227,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         for (let i = 0; i < 256; i++) {
           emu.hardware.Request(HardwareReq.EXECUTE_INSTR);
         }
-        sendFrameToWebview();
+        sendFrameToWebview(true);
         printDebugState('Step 256:', emu.hardware, emuOutput, panel);
         break;
       case 'restart':
@@ -247,6 +247,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   currentPanelController = {
     pause: () => {
       emu.hardware?.Request(HardwareReq.STOP);
+      sendFrameToWebview(true);
       printDebugState('Pause:', emu.hardware!, emuOutput, panel);
       emitToolbarState(false);
     },
@@ -262,7 +263,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       if (!emu.hardware) return;
       emu.hardware.Request(HardwareReq.STOP);
       emu.hardware.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
-      sendFrameToWebview();
+      sendFrameToWebview(true);
       printDebugState('Run frame:', emu.hardware, emuOutput, panel);
       emitToolbarState(false);
     }
@@ -324,7 +325,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
     } while (running);
 
-
+    // Force update hardware stats when breaking to ensure Register panel is synchronized
+    sendFrameToWebview(true);
     printDebugState('Break:', emu.hardware!, emuOutput, panel);
     emitToolbarState(false);
   }
