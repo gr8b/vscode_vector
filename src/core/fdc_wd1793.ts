@@ -51,13 +51,7 @@ const S_DRIVE = 0x03;      // Drive select mask (bits 0-1)
 const S_RESET = 0x04;      // Reset bit
 const S_HALT = 0x08;       // Halt bit
 
-// ============================================================================
-// Helper function
-// ============================================================================
 
-function Max(a: number, b: number): number {
-    return a > b ? a : b;
-}
 
 // ============================================================================
 // Port enum
@@ -158,6 +152,8 @@ export class Fdc1793 {
     private rwLen: number = 0; // The length of the transferred data
 
     private ptr: number = 0;   // Pointer offset into disk data
+    private headerPtr: number = 0;  // Pointer for reading header data
+    private readingHeader: boolean = false; // Flag for READ-ADDRESS command
     private disk: FDisk | null = null; // Current disk image
 
     constructor() {
@@ -179,7 +175,7 @@ export class Fdc1793 {
         const sectors = FDD_SECTORS_PER_TRACK * (trackID * FDD_SIDES + sideID);
         // In CHS addressing the sector numbers always start at 1,
         // but in the data buffer the sector numbers always start at 0.
-        const sectorAdjusted = Max(0, sectorID - 1);
+        const sectorAdjusted = Math.max(0, sectorID - 1);
         const position = (sectors + sectorAdjusted) * FDD_SECTOR_LEN;
 
         // Store header for each sector
@@ -207,6 +203,8 @@ export class Fdc1793 {
         this.wait = 0;
         this.cmd = 0xD0;
         this.ptr = 0;
+        this.headerPtr = 0;
+        this.readingHeader = false;
     }
 
     /**
@@ -249,19 +247,25 @@ export class Fdc1793 {
 
             case Port.DATA:
                 if (this.rwLen > 0 && this.disk) {
-                    // Read data
-                    this.regs[Port.DATA] = this.disk.data[this.ptr++];
+                    // Check if reading header data (READ-ADDRESS command)
+                    if (this.readingHeader) {
+                        this.regs[Port.DATA] = this.disk.header[this.headerPtr++];
+                    } else {
+                        // Read sector data
+                        this.regs[Port.DATA] = this.disk.data[this.ptr++];
+                    }
                     this.disk.reads++;
                     if (--this.rwLen) {
                         this.wait = 255; // Reset timeout watchdog
-                        // Advance to the next sector if needed
-                        if (!(this.rwLen & (FDD_SECTOR_LEN - 1))) {
+                        // Advance to the next sector if needed (only for sector reads)
+                        if (!this.readingHeader && !(this.rwLen & (FDD_SECTOR_LEN - 1))) {
                             this.regs[Port.SECTOR]++;
                         }
                     } else {
                         // Read completed
                         this.regs[0] &= ~(F_DRQ | F_BUSY);
                         this.irq = WD1793_IRQ;
+                        this.readingHeader = false;
                     }
                 }
                 return this.regs[Port.DATA];
@@ -414,29 +418,31 @@ export class Fdc1793 {
                         break;
 
                     case 0xC0: // READ-ADDRESS
-                        // Read first sector address from the track
-                        if (!this.disk) {
-                            this.ptr = -1;
-                        } else {
-                            for (J = 0; J < 256; J++) {
-                                const position = this.seek(this.side, this.track, J);
-                                if (position >= 0) {
-                                    this.ptr = position;
-                                    break;
+                        {
+                            // Read first sector address from the track
+                            let foundPosition = -1;
+                            if (this.disk) {
+                                for (J = 0; J < 256; J++) {
+                                    const position = this.seek(this.side, this.track, J);
+                                    if (position >= 0) {
+                                        foundPosition = position;
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        // If address found, initiate data transfer
-                        if (this.ptr < 0) {
-                            this.regs[0] |= F_NOTFOUND;
-                            this.irq = WD1793_IRQ;
-                        } else {
-                            // Point to header instead of data
-                            this.ptr = -1; // Special marker for header read
-                            this.rwLen = 6;
-                            this.regs[0] |= F_BUSY | F_DRQ;
-                            this.irq = WD1793_DRQ;
-                            this.wait = 255;
+                            // If address found, initiate data transfer
+                            if (foundPosition < 0) {
+                                this.regs[0] |= F_NOTFOUND;
+                                this.irq = WD1793_IRQ;
+                            } else {
+                                // Set up for header reading (6 bytes from disk.header)
+                                this.readingHeader = true;
+                                this.headerPtr = 0;
+                                this.rwLen = 6;
+                                this.regs[0] |= F_BUSY | F_DRQ;
+                                this.irq = WD1793_DRQ;
+                                this.wait = 255;
+                            }
                         }
                         break;
 
