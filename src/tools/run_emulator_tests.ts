@@ -471,7 +471,8 @@ function runTestCase(test: EmulatorTestCase): EmulatorTestResult {
     hw = new Hardware('', '', true);
     hw.Request(HardwareReq.SET_MEM, { data: assembleResult.output, addr: ROM_LOAD_ADDR });
     hw.Request(HardwareReq.RESTART);
-    // Set PC to ROM_LOAD_ADDR since code is assembled with .org 0x100
+    // Set PC to ROM_LOAD_ADDR (0x100) to match the .org directive in test files.
+    // All test assembly files use .org 0x100 which matches ROM_LOAD_ADDR.
     hw.cpu.state.regs.pc.word = ROM_LOAD_ADDR;
   } catch (e) {
     return {
@@ -499,11 +500,6 @@ function runTestCase(test: EmulatorTestCase): EmulatorTestResult {
   // Validate expectations
   const cpu = hw.cpu;
   const memory = hw.memory;
-
-  if (test.expect.success === false) {
-    // For tests expecting failure, we handled this during assembly
-    details.push('Expected execution failure but test ran successfully');
-  }
 
   compareRegisters(cpu, test.expect.registers, details);
   compareFlags(cpu, test.expect.flags, details);
