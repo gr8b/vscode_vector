@@ -131,7 +131,7 @@ function tokenizeConditionExpression(expr: string): ExprToken[] {
       i = j;
       continue;
     }
-    throw new Error(`Unexpected character '${ch}' in expression`);
+    throw new Error(`Unexpected character '${ch}' in expression '${expr}'`);
   }
   return tokens;
 }

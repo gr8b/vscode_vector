@@ -85,7 +85,7 @@ Features and notes
 
 - Diagnostics: invalid mnemonics or bad operands are reported as errors with file/line and the offending source text. The assembler rejects invalid operations such as `MOV M,M`.
 - `.macro` / `.endmacro`: build parameterized macros (with defaults, nested calls, and per-invocation label namespaces) that expand inline before assembly.
-- `.if` / `.endif`: wrap any sequence of source lines in a conditional block that assembles only when its expression evaluates to non-zero. You can nest `.if` directives freely, and the parser short-circuits inactive branches so forward references inside skipped blocks do not trigger errors. Expressions support decimal/hex/binary literals, character constants, symbol names (labels, constants, `@local` labels), arithmetic (`+ - * / % << >>`), comparisons (`== != < <= > >=`), bitwise logic (`& | ^ ~`), and boolean operators (`! && ||`). Example:
+- `.if` / `.endif`: wrap any sequence of source lines in a conditional block that assembles only when its expression evaluates to non-zero. You can nest `.if` directives freely, and the parser short-circuits inactive branches so forward references inside skipped blocks do not trigger errors. The argument may be a single numeric/boolean literal or any full expression evaluated with the rules below. Expressions support decimal/hex/binary literals, character constants, symbol names (labels, constants, `@local` labels), arithmetic (`+ - * / % << >>`), comparisons (`== != < <= > >=`), bitwise logic (`& | ^ ~`), and boolean operators (`! && ||`). Example:
 
 ```
 Value = 3
@@ -151,7 +151,7 @@ Alternative: `DB`
 Macros
 ------
 
-Use `.macro Name(param=default, otherParam, optional=$10)` to define reusable code blocks. A macro's body is copied inline wherever you invoke `Name(...)`, and all parameters are substituted as plain text before the normal two-pass assembly runs. Parameters that are omitted during a call fall back to their default value; if you skip both an argument and a default, the assembler injects `0` (matching the original toolchain behaviour).
+Use `.macro Name(param, otherParam, optionalParam=$10)` to define reusable code blocks. A macro's body is copied inline wherever you invoke `Name(...)`, and all parameters are substituted as plain text before the normal two-pass assembly runs. Each parameter ultimately resolves to the same numeric/boolean values accepted by others durectives such as `.if`, `.loop`, etc. inside a macro. Parameters that are omitted during a call fall back to their default value.
 
 Each macro call receives its own namespace for "normal" (`Label:`) and local (`@loop`) labels, so you can safely reuse throwaway labels inside macros or even call a macro recursively. Normal labels defined inside the macro are exported as `MacroName_<call-index>.Label`, letting you jump back into generated code for debugging tricks:
 
