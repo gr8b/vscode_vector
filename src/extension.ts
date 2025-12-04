@@ -1007,6 +1007,74 @@ export function activate(context: vscode.ExtensionContext) {
     const asmPaths = collectAsmPathsFromEvent(ev);
     if (asmPaths.size) scheduleBreakpointProjectCompile(asmPaths);
   }));
+
+  // Register DefinitionProvider for .include directive paths
+  // This enables Ctrl+hover underline and Ctrl+click navigation to included files
+  const includeDefinitionProvider: vscode.DefinitionProvider = {
+    provideDefinition(document: vscode.TextDocument, position: vscode.Position, token: vscode.CancellationToken): vscode.ProviderResult<vscode.Definition | vscode.DefinitionLink[]> {
+      const line = document.lineAt(position.line);
+      const lineText = line.text;
+
+      // Match .include "filename" or .include 'filename'
+      // Strip comments first for the match
+      const textWithoutComment = lineText.replace(/\/\/.*$|;.*$/, '');
+      const includeMatch = textWithoutComment.match(/^\s*\.include\s+["']([^"']+)["']/i);
+      if (!includeMatch) {
+        return undefined;
+      }
+
+      const includedPath = includeMatch[1];
+      // Calculate the range of the path string in the original line text
+      // Find the quote character and its position in the original line
+      const doubleQuoteIndex = lineText.indexOf('"');
+      const singleQuoteIndex = lineText.indexOf("'");
+      let pathStartIndex: number;
+      if (doubleQuoteIndex >= 0 && (singleQuoteIndex < 0 || doubleQuoteIndex < singleQuoteIndex)) {
+        pathStartIndex = doubleQuoteIndex + 1;
+      } else if (singleQuoteIndex >= 0) {
+        pathStartIndex = singleQuoteIndex + 1;
+      } else {
+        return undefined;
+      }
+      const pathEndIndex = pathStartIndex + includedPath.length;
+
+      // Check if the cursor position is within the path
+      if (position.character < pathStartIndex || position.character > pathEndIndex) {
+        return undefined;
+      }
+
+      // Resolve the path relative to the current document
+      let resolvedPath: string;
+      if (path.isAbsolute(includedPath)) {
+        resolvedPath = includedPath;
+      } else {
+        const baseDir = path.dirname(document.uri.fsPath);
+        resolvedPath = path.resolve(baseDir, includedPath);
+      }
+
+      // Check if the file exists
+      if (!fs.existsSync(resolvedPath)) {
+        return undefined;
+      }
+
+      const targetUri = vscode.Uri.file(resolvedPath);
+      const targetRange = new vscode.Range(0, 0, 0, 0);
+      const originRange = new vscode.Range(
+        position.line, pathStartIndex,
+        position.line, pathEndIndex
+      );
+
+      return [{
+        targetUri,
+        targetRange,
+        originSelectionRange: originRange
+      }] as vscode.DefinitionLink[];
+    }
+  };
+
+  context.subscriptions.push(
+    vscode.languages.registerDefinitionProvider({ language: 'asm' }, includeDefinitionProvider)
+  );
 }
 
 export function deactivate() {}
