@@ -330,7 +330,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     if (op === '.ENCODING') {
       // .encoding "type", "case"
-      const rest = line.slice(line.toUpperCase().indexOf('.ENCODING') + 9).trim();
+      const rest = tokens.slice(1).join(' ').trim();
       const args = splitTopLevelArgs(rest);
       if (args.length < 1) {
         errors.push(`Missing encoding type for .encoding at ${originDesc}`);
@@ -368,7 +368,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     if (op === '.TEXT') {
       // .text "string", 'c', ...
-      const rest = line.slice(line.toUpperCase().indexOf('.TEXT') + 5).trim();
+      const rest = tokens.slice(1).join(' ').trim();
       if (!rest.length) {
         errors.push(`Missing value for .text at ${originDesc}`);
         continue;
@@ -853,7 +853,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     if (op === '.ENCODING') {
       // .encoding "type", "case" - update encoding state
-      const rest = line.slice(line.toUpperCase().indexOf('.ENCODING') + 9).trim();
+      const rest = tokens.slice(1).join(' ').trim();
       const args = splitTopLevelArgs(rest);
       if (args.length < 1) continue;  // Error already reported in first pass
       const typeArg = parseStringLiteral(args[0]);
@@ -878,7 +878,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     if (op === '.TEXT') {
       // .text "string", 'c', ... - emit bytes
-      const rest = line.slice(line.toUpperCase().indexOf('.TEXT') + 5).trim();
+      const rest = tokens.slice(1).join(' ').trim();
       if (!rest.length) continue;  // Error already reported in first pass
       const parts = splitTopLevelArgs(rest);
       for (const part of parts) {
