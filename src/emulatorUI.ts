@@ -456,6 +456,8 @@ export type DataDirectiveHoverInfo = {
   address: number;
   unitBytes: number;
   directive: 'byte' | 'word';
+  range: vscode.Range;
+  sourceValue?: number;
 };
 
 export function resolveDataDirectiveHover(document: vscode.TextDocument, position: vscode.Position): DataDirectiveHoverInfo | undefined {
@@ -482,11 +484,17 @@ export function resolveDataDirectiveHover(document: vscode.TextDocument, positio
   const addr = (span.start + byteOffset) & 0xffff;
   const value = readMemoryValueForSpan(lastBreakpointSource.hardware, addr, span.unitBytes);
   if (value === undefined) return undefined;
+  const tokenRange = ranges[matchIndex];
+  const literalRange = new vscode.Range(position.line, tokenRange.start, position.line, tokenRange.end);
+  const literalText = document.getText(literalRange);
+  const sourceValue = parseDataLiteralValue(literalText, span.unitBytes);
   return {
     value,
     address: addr,
     unitBytes: span.unitBytes,
-    directive
+    directive,
+    range: literalRange,
+    sourceValue
   };
 }
 
@@ -1012,6 +1020,27 @@ function readMemoryValueForSpan(hardware: Hardware | undefined | null, addr: num
     value |= byte << (8 * i);
   }
   return value >>> 0;
+}
+
+function parseDataLiteralValue(text: string, unitBytes: number): number | undefined {
+  if (!text) return undefined;
+  const trimmed = text.trim();
+  if (!trimmed.length) return undefined;
+  let value: number | undefined;
+  const normalizeUnderscore = (s: string) => s.replace(/_/g, '');
+  if (/^0x[0-9a-fA-F_]+$/.test(trimmed)) value = parseInt(normalizeUnderscore(trimmed.slice(2)), 16);
+  else if (/^\$[0-9a-fA-F_]+$/.test(trimmed)) value = parseInt(normalizeUnderscore(trimmed.slice(1)), 16);
+  else if (/^0b[01_]+$/i.test(trimmed)) value = parseInt(normalizeUnderscore(trimmed.slice(2)), 2);
+  else if (/^b[01_]+$/i.test(trimmed)) value = parseInt(normalizeUnderscore(trimmed.slice(1)), 2);
+  else if (/^%[01_]+$/.test(trimmed)) value = parseInt(normalizeUnderscore(trimmed.slice(1)), 2);
+  else if (/^[-+]?[0-9]+$/.test(trimmed)) value = parseInt(trimmed, 10);
+  else if (/^'(.|\\.)'$/.test(trimmed)) {
+    const inner = trimmed.slice(1, trimmed.length - 1);
+    value = inner.length === 1 ? inner.charCodeAt(0) : inner.charCodeAt(inner.length - 1);
+  }
+  if (value === undefined || Number.isNaN(value)) return undefined;
+  const mask = unitBytes >= 4 ? 0xffffffff : ((1 << (unitBytes * 8)) >>> 0) - 1;
+  return value & mask;
 }
 
 

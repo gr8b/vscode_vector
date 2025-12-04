@@ -985,6 +985,26 @@ export function activate(context: vscode.ExtensionContext) {
   const asmHoverProvider = vscode.languages.registerHoverProvider('asm', {
     provideHover(document, position) {
       if (!isEmulatorPanelPaused()) return undefined;
+      const dataHover = resolveDataDirectiveHover(document, position);
+      if (dataHover) {
+        const valueWidth = Math.max(2, dataHover.unitBytes * 2);
+        const memoryHex = '0x' + (dataHover.value >>> 0).toString(16).toUpperCase().padStart(valueWidth, '0');
+        const memoryDec = (dataHover.value >>> 0).toString(10);
+        const addressHex = '0x' + dataHover.address.toString(16).toUpperCase().padStart(4, '0');
+        const md = new vscode.MarkdownString(undefined, true);
+        md.appendMarkdown(`**${dataHover.directive.toUpperCase()} literal**\n\n`);
+        md.appendMarkdown(`- addr: \`${addressHex}\`\n`);
+        md.appendMarkdown(`- memory: \`${memoryHex}/${memoryDec}\`\n`);
+        if (typeof dataHover.sourceValue === 'number') {
+          const normalizedSource = dataHover.sourceValue >>> 0;
+          const sourceHex = '0x' + normalizedSource.toString(16).toUpperCase().padStart(valueWidth, '0');
+          const sourceDec = normalizedSource.toString(10);
+          md.appendMarkdown(`- source: \`${sourceHex}/${sourceDec}\``);
+        }
+        md.isTrusted = false;
+        return new vscode.Hover(md, dataHover.range);
+      }
+
       const wordRange = document.getWordRangeAtPosition(position, /[A-Za-z_@.][A-Za-z0-9_@.]*/);
       const identifier = wordRange ? document.getText(wordRange) : '';
       const filePath = document.uri.scheme === 'file' ? document.uri.fsPath : undefined;
@@ -1012,21 +1032,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
       }
 
-      const dataHover = resolveDataDirectiveHover(document, position);
-      if (dataHover) {
-        const valueWidth = Math.max(2, dataHover.unitBytes * 2);
-        const hexValue = '0x' + (dataHover.value >>> 0).toString(16).toUpperCase().padStart(valueWidth, '0');
-        const decValue = (dataHover.value >>> 0).toString(10);
-        const addressHex = '0x' + dataHover.address.toString(16).toUpperCase().padStart(4, '0');
-        const label = wordRange ? document.getText(wordRange) : dataHover.directive.toUpperCase();
-        const md = new vscode.MarkdownString(undefined, true);
-        md.appendMarkdown(`**${label}** (${dataHover.directive} data)\n\n`);
-        md.appendMarkdown(`- addr: \`${addressHex}\`\n`);
-        md.appendMarkdown(`- hex: \`${hexValue}\`\n`);
-        md.appendMarkdown(`- dec: \`${decValue}\``);
-        md.isTrusted = false;
-        return new vscode.Hover(md, wordRange ?? new vscode.Range(position, position));
-      }
       return undefined;
     }
   });
