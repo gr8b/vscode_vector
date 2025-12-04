@@ -128,6 +128,13 @@ AlignedLabel:
 ```
 
 `AlignedLabel` is assigned the aligned address ($110) and the gap between `$103` and `$10F` is filled with zeros.
+- `.word value[, values...]`: emit one or more 16-bit words at the current address. Values may be decimal, hexadecimal (`0x`/`$`), or binary (`b`/`%`) literals. Negative decimal literals are allowed down to -0x7FFF (15-bit magnitude) and are encoded using two's complement. Each value is written little-endian (low byte first). Example:
+
+```
+.word $1234, 42, b0000_1111, -5
+```
+
+The snippet above outputs `34 12 2A 00 0F 00 FB FF`.
 
 Macros
 ------

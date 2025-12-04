@@ -115,6 +115,40 @@ function toByte(v: string): number | null {
   return null;
 }
 
+type WordLiteralResult = { value: number } | { error: string };
+
+function parseWordLiteral(v: string): WordLiteralResult {
+  const text = v.trim();
+  if (!text.length) return { error: 'Missing .word value' };
+
+  const negativeMatch = /^-([0-9]+)$/.exec(text);
+  if (negativeMatch) {
+    const magnitude = parseInt(negativeMatch[1], 10);
+    if (isNaN(magnitude)) return { error: `Invalid negative .word value '${text}'` };
+    if (magnitude > 0x7fff) return { error: `Negative .word value '${text}' exceeds 15-bit limit` };
+    const value = (-magnitude) & 0xffff;
+    return { value };
+  }
+
+  let parsed: number | null = null;
+  if (/^0x[0-9a-fA-F]+$/.test(text)) parsed = parseInt(text.slice(2), 16);
+  else if (/^\$[0-9a-fA-F]+$/.test(text)) parsed = parseInt(text.slice(1), 16);
+  else if (/^[0-9]+$/.test(text)) parsed = parseInt(text, 10);
+  else if (/^b[01_]+$/i.test(text)) parsed = parseInt(text.slice(1).replace(/_/g, ''), 2);
+  else if (/^%[01_]+$/.test(text)) parsed = parseInt(text.slice(1).replace(/_/g, ''), 2);
+
+  if (parsed === null || isNaN(parsed)) {
+    return { error: `Invalid .word value '${text}'` };
+  }
+  if (parsed < 0) {
+    return { error: `.word value '${text}' cannot be negative (only decimal negatives allowed)` };
+  }
+  if (parsed > 0xffff) {
+    return { error: `.word value '${text}' exceeds 16-bit range` };
+  }
+  return { value: parsed & 0xffff };
+}
+
 // Parse a numeric token without masking so we can check its full width
 function parseNumberFull(v: string): number | null {
   if (!v) return null;
@@ -1350,6 +1384,27 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       continue;
     }
 
+    if (op === '.WORD' || op === 'WORD') {
+      const rest = tokens.slice(1).join(' ').trim();
+      if (!rest.length) {
+        errors.push(`Missing value for .word at ${originDesc}`);
+        continue;
+      }
+      const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      if (!parts.length) {
+        errors.push(`Missing value for .word at ${originDesc}`);
+        continue;
+      }
+      for (const part of parts) {
+        const parsed = parseWordLiteral(part);
+        if ('error' in parsed) {
+          errors.push(`${parsed.error} at ${originDesc}`);
+        }
+        addr += 2;
+      }
+      continue;
+    }
+
     if (op === 'DS') {
       // DS count  (reserve bytes)
       const rest = tokens.slice(1).join(' ').trim();
@@ -1768,6 +1823,32 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
           out.push(val & 0xff);
           addr++;
         }
+      }
+      continue;
+    }
+
+    if (op === '.WORD' || op === 'WORD') {
+      const rest = tokens.slice(1).join(' ').trim();
+      if (!rest.length) {
+        errors.push(`Missing value for .word at ${originDesc}`);
+        continue;
+      }
+      const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      if (!parts.length) {
+        errors.push(`Missing value for .word at ${originDesc}`);
+        continue;
+      }
+      for (const part of parts) {
+        const parsed = parseWordLiteral(part);
+        let value = 0;
+        if ('error' in parsed) {
+          errors.push(`${parsed.error} at ${originDesc}`);
+        } else {
+          value = parsed.value & 0xffff;
+        }
+        out.push(value & 0xff);
+        out.push((value >> 8) & 0xff);
+        addr += 2;
       }
       continue;
     }
