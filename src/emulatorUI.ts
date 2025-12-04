@@ -154,6 +154,12 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     }
   };
 
+  /**
+   * Send the current display frame to the webview.
+   * @param forceStats If true, bypasses the throttling mechanism to force an immediate
+   *                   hardware stats update. Use this after debug actions (pause, step, break)
+   *                   to ensure the Register panel is synchronized with the highlighted source line.
+   */
   const sendFrameToWebview = (forceStats: boolean = false) => {
     const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
     try {
@@ -325,7 +331,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
     } while (running);
 
-    // Force update hardware stats when breaking to ensure Register panel is synchronized
+    // Force hardware stats update (bypassing throttle) when breaking to ensure Register panel is synchronized
     sendFrameToWebview(true);
     printDebugState('Break:', emu.hardware!, emuOutput, panel);
     emitToolbarState(false);
