@@ -94,7 +94,7 @@ export class SoundAY8910 {
   private estep(): number {
     if (this.envx >> 4) {
       if (this.ay13 & 1) { // ENV.HOLD
-        return 15 * (((this.ay13 >> 1) ^ this.ay13) & 2) / 2;
+        return ((this.ay13 >> 1) ^ this.ay13) & 2 ? 15 : 0;
       }
       this.envx = 0;
       this.ay13 ^= (this.ay13 << 1) & 4;
@@ -130,7 +130,7 @@ export class SoundAY8910 {
     const envPeriod = (this.ayr[11] << 1) | (this.ayr[12] << 9);
     if (++this.envc >= envPeriod) {
       this.envc = 0;
-      if ((this.envx >> 4) && (~this.ay13 & 1)) {
+      if ((this.envx >> 4) && !(this.ay13 & 1)) {
         this.envx = 0;
         this.ay13 ^= (this.ay13 << 1) & 4;
       }
@@ -222,7 +222,7 @@ export class AYWrapper {
 
   Init(): void {
     this.ayAccu = 0;
-    this.last = 0.0;
+    this.last = 0;
   }
 
   /**
