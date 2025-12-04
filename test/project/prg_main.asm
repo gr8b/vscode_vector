@@ -22,27 +22,9 @@ start:
 	  		call set_palette
 
 loop:
-			; fill
-			lxi h, 0x80ff
-			lxi b, 0x80
-			mvi a, 0xff
-			call fill_buff
-			hlt
-			hlt
-			hlt
-			hlt
-			hlt
+			Fill(0xFF, 0x80FF, 0x80, true, 3)
 
-			; erase
-			lxi h, 0x80ff
-			lxi b, 0x80
-			mvi a, 0x00
-			call fill_buff
-			hlt
-			hlt
-			hlt
-			hlt
-			hlt
+			Fill(0x80, 0x80FF, 0x80 + $7F)
 
 			jmp loop
 
@@ -50,6 +32,20 @@ end:
 	  		di
 			; end of program
 	  		hlt
+
+
+.macro Fill(byte, address, len=0xff, halts=true, lp=5)
+			lxi h, address
+			lxi b, len
+			mvi a, byte
+			call fill_buff
+	.if halts
+		.loop lp
+			hlt
+		.endloop
+	.endif
+.endm
+
 
 PALETTE_LEN = 16
 set_palette: ; non-local label
@@ -76,7 +72,9 @@ set_palette: ; non-local label
 			ret
 
 palette:
-	  		DB b01_011_011, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, b00_000_000,
-	  		DB 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+	  		.byte 0x10, 0x30, %1111_0000, b00_000_010
+			DB 0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+			.word $EE, 0x03,
+			DW $3040, 0xFFFF, b1111_1111_0000_1111,
 
 .include "fill_buff.asm"

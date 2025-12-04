@@ -1,111 +1,26 @@
 import * as fs from 'fs';
 import * as path from 'path';
-
-type AssembleResult = {
-  success: boolean;
-  output?: Buffer;
-  map?: Record<number, number>; // source line (1-based) -> address
-  errors?: string[];
-  warnings?: string[];
-  labels?: Record<string, { addr: number; line: number; src?: string }>;
-  origins?: Array<{ file?: string; line: number }>;
-};
-
-const regCodes: Record<string, number> = {
-  B: 0,
-  C: 1,
-  D: 2,
-  E: 3,
-  H: 4,
-  L: 5,
-  M: 6,
-  A: 7
-};
-
-const mviOpcodes = {
-  B: 0x06,
-  C: 0x0e,
-  D: 0x16,
-  E: 0x1e,
-  H: 0x26,
-  L: 0x2e,
-  M: 0x36,
-  A: 0x3e
-} as Record<string, number>;
-
-function toByte(v: string): number | null {
-  if (/^0x[0-9a-fA-F]+$/.test(v)) return parseInt(v.slice(2), 16) & 0xff;
-  if (/^[0-9]+$/.test(v)) return parseInt(v, 10) & 0xff;
-  // binary forms: b010101 or %0101 with optional underscores
-  if (/^b[01_]+$/i.test(v)) return parseInt(v.slice(1).replace(/_/g, ''), 2) & 0xff;
-  if (/^%[01_]+$/.test(v)) return parseInt(v.slice(1).replace(/_/g, ''), 2) & 0xff;
-  return null;
-}
-
-// Parse a numeric token without masking so we can check its full width
-function parseNumberFull(v: string): number | null {
-  if (!v) return null;
-  const s = v.trim();
-  if (/^0x[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(2), 16);
-  if (/^\$[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(1), 16);
-  if (/^[0-9]+$/.test(s)) return parseInt(s, 10);
-  if (/^b[01_]+$/i.test(s)) return parseInt(s.slice(1).replace(/_/g, ''), 2);
-  if (/^%[01_]+$/.test(s)) return parseInt(s.slice(1).replace(/_/g, ''), 2);
-  return null;
-}
-
-function parseAddressToken(v: string, labels?: Map<string, { addr: number; line: number; src?: string }>, consts?: Map<string, number>): number | null {
-  if (!v) return null;
-  const s = v.trim();
-  if (/^0x[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(2), 16) & 0xffff;
-  if (/^\$[0-9a-fA-F]+$/.test(s)) return parseInt(s.slice(1), 16) & 0xffff;
-  if (/^[0-9]+$/.test(s)) return parseInt(s, 10) & 0xffff;
-
-  // support simple arithmetic chains like "a + b - 1" where tokens can be
-  // numeric, global labels, or constants (from `consts`). This evaluates left
-  // to right; local (@) labels are not resolved here (caller should use
-  // `resolveAddressToken` which understands scope).
-  const exprParts = s.split(/\s*([+-])\s*/);
-  if (exprParts.length > 1) {
-    let acc: number | null = null;
-    for (let pi = 0; pi < exprParts.length; pi += 2) {
-      const tok = exprParts[pi].trim();
-      let val: number | null = null;
-      // numeric literal
-      val = parseNumberFull(tok);
-      if (val === null) {
-        if (consts && consts.has(tok)) val = consts.get(tok)!;
-        else if (labels && labels.has(tok)) val = labels.get(tok)!.addr;
-        else val = null;
-      }
-      if (val === null) return null;
-      if (acc === null) acc = val;
-      else {
-        const op = exprParts[pi - 1];
-        if (op === '+') acc = acc + val;
-        else acc = acc - val;
-      }
-    }
-    return (acc! & 0xffff);
-  }
-
-  if (consts && consts.has(s)) return consts.get(s)! & 0xffff;
-  if (labels && labels.has(s)) return labels.get(s)!.addr & 0xffff;
-  return null;
-}
-
-function resolveLocalLabelKey(name: string, originFile?: string, sourcePath?: string): string {
-  if (!name || name[0] !== '@') return name;
-  // strip leading @ and append '_' + basename without extension of the file
-  const baseFile = originFile || sourcePath;
-  const base = baseFile ? path.basename(baseFile, path.extname(baseFile)) : 'memory';
-  return '@' + name.slice(1) + '_' + base;
-}
+import { AssembleResult, ExpressionEvalContext, IfFrame, LocalLabelScopeIndex, SourceOrigin } from './assembler/types';
+import {
+  stripInlineComment,
+  splitTopLevelArgs,
+  parseNumberFull,
+  parseAddressToken,
+  parseWordLiteral,
+  parseStringLiteral,
+  regCodes,
+  mviOpcodes,
+  toByte,
+  describeOrigin
+} from './assembler/utils';
+import { evaluateConditionExpression } from './assembler/expression';
+import { prepareMacros, expandMacroInvocations } from './assembler/macro';
+import { expandLoopDirectives } from './assembler/loops';
 
 export function assemble(source: string, sourcePath?: string): AssembleResult {
   // Expand .include directives and build an origin map so we can report
   // errors/warnings that reference the original file and line number.
-  function processContent(content: string, file?: string, depth = 0): { lines: string[]; origins: Array<{ file?: string; line: number }> } {
+  function processContent(content: string, file?: string, depth = 0): { lines: string[]; origins: SourceOrigin[] } {
     if (depth > 16) throw new Error(`Include recursion too deep (>${16}) when processing ${file || '<memory>'}`);
     const outLines: string[] = [];
     const origins: Array<{ file?: string; line: number }> = [];
@@ -143,42 +58,86 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     return { lines: outLines, origins };
   }
 
-  let expanded: { lines: string[]; origins: Array<{ file?: string; line: number }> };
+  let expanded: { lines: string[]; origins: SourceOrigin[] };
   try {
     expanded = processContent(source, sourcePath, 0);
   } catch (err: any) {
     return { success: false, errors: [err.message] };
   }
-  const lines = expanded.lines;
+  const macroPrep = prepareMacros(expanded.lines, expanded.origins, sourcePath);
+  if (macroPrep.errors.length) {
+    return { success: false, errors: macroPrep.errors, origins: expanded.origins };
+  }
+  const macroExpanded = expandMacroInvocations(macroPrep.lines, macroPrep.origins, macroPrep.macros, sourcePath);
+  if (macroExpanded.errors.length) {
+    return { success: false, errors: macroExpanded.errors, origins: macroExpanded.origins };
+  }
+  const loopExpanded = expandLoopDirectives(macroExpanded.lines, macroExpanded.origins, sourcePath);
+  if (loopExpanded.errors.length) {
+    return { success: false, errors: loopExpanded.errors, origins: loopExpanded.origins };
+  }
+  const lines = loopExpanded.lines;
   const labels = new Map<string, { addr: number; line: number; src?: string }>();
   const consts = new Map<string, number>();
   // localsIndex: scopeKey -> (localName -> array of { key, line }) ordered by appearance
-  const localsIndex = new Map<string, Map<string, Array<{ key: string; line: number }>>>();
+  const localsIndex: LocalLabelScopeIndex = new Map();
   // global numeric id counters per local name to ensure exported keys are unique
   const globalLocalCounters = new Map<string, number>();
   const scopes: string[] = new Array(lines.length);
+  const alignDirectives: Array<{ value: number }> = new Array(lines.length);
   let directiveCounter = 0;
-  function getFileKey(orig?: { file?: string; line: number }) {
+  function getFileKey(orig?: SourceOrigin) {
     return (orig && orig.file) ? path.resolve(orig.file) : (sourcePath ? path.resolve(sourcePath) : '<memory>');
   }
-  function getScopeKey(orig?: { file?: string; line: number }) {
-    return getFileKey(orig) + '::' + directiveCounter;
+  function getScopeKey(orig?: SourceOrigin) {
+    let key = getFileKey(orig) + '::' + directiveCounter;
+    if (orig?.macroScope) key += `::${orig.macroScope}`;
+    return key;
   }
 
   let addr = 0;
   const errors: string[] = [];
   const warnings: string[] = [];
-  const origins = expanded.origins;
+  const origins = loopExpanded.origins;
+
+  const ifStack: IfFrame[] = [];
+
+  function registerLabel(name: string, address: number, origin: SourceOrigin | undefined, fallbackLine: number, scopeKey: string) {
+    if (!name) return;
+    const srcName = origin && origin.file ? path.basename(origin.file) : (sourcePath ? path.basename(sourcePath) : undefined);
+    if (name[0] === '@') {
+      const localName = name.slice(1);
+      let fileMap = localsIndex.get(scopeKey);
+      if (!fileMap) {
+        fileMap = new Map();
+        localsIndex.set(scopeKey, fileMap);
+      }
+      let arr = fileMap.get(localName);
+      if (!arr) {
+        arr = [];
+        fileMap.set(localName, arr);
+      }
+      const gid = globalLocalCounters.get(localName) || 0;
+      globalLocalCounters.set(localName, gid + 1);
+      const key = '@' + localName + '_' + gid;
+      arr.push({ key, line: origin ? origin.line : fallbackLine });
+      labels.set(key, { addr: address, line: origin ? origin.line : fallbackLine, src: srcName });
+    } else {
+      if (labels.has(name)) {
+        const prev = labels.get(name)!;
+        errors.push(`Duplicate label '${name}' at ${fallbackLine} (previously at ${prev.line})`);
+      } else {
+        labels.set(name, { addr: address, line: origin ? origin.line : fallbackLine, src: srcName });
+      }
+    }
+  }
 
   // First pass: labels and address calculation
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
-    const line = raw.replace(/\/\/.*$|;.*$/, '').trim();
+    const line = stripInlineComment(raw).trim();
     if (!line) continue;
-    // handle optional leading label (either with colon or bare before an opcode/directive)
-    const tokens = line.split(/\s+/);
-    let labelHere: string | null = null;
-    // If the origin file changed from the previous line, treat it as a scope boundary
+
     if (i > 0) {
       const prev = origins[i - 1];
       const curr = origins[i];
@@ -188,14 +147,80 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         directiveCounter++;
       }
     }
-    // record current scope key for this line (before any .org on this line takes effect)
     scopes[i] = getScopeKey(origins[i]);
+    const originDesc = describeOrigin(origins[i], i + 1, sourcePath);
+
+    const labelIfMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.if\b/i);
+    if (labelIfMatch && line[0] !== '.') {
+      errors.push(`Labels are not allowed on .if directives at ${originDesc}`);
+      continue;
+    }
+    const labelEndifMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.endif\b/i);
+    if (labelEndifMatch && line[0] !== '.') {
+      errors.push(`Labels are not allowed on .endif directives at ${originDesc}`);
+      continue;
+    }
+    const labelPrintMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.print\b/i);
+    if (labelPrintMatch && line[0] !== '.') {
+      errors.push(`Labels are not allowed on .print directives at ${originDesc}`);
+      continue;
+    }
+
+    const endifMatch = line.match(/^\.endif\b(.*)$/i);
+    if (endifMatch) {
+      const remainder = (endifMatch[1] || '').trim();
+      if (remainder.length) errors.push(`Unexpected tokens after .endif at ${originDesc}`);
+      if (!ifStack.length) errors.push(`.endif without matching .if at ${originDesc}`);
+      else ifStack.pop();
+      continue;
+    }
+
+    const ifMatch = line.match(/^\.if\b(.*)$/i);
+    if (ifMatch) {
+      const expr = (ifMatch[1] || '').trim();
+      const parentActive = ifStack.length === 0 ? true : ifStack[ifStack.length - 1].effective;
+      if (!expr.length) {
+        errors.push(`Missing expression for .if at ${originDesc}`);
+        ifStack.push({ effective: false, suppressed: !parentActive, origin: origins[i], lineIndex: i + 1 });
+        continue;
+      }
+      const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: i + 1 };
+      let conditionResult = false;
+      if (!parentActive) {
+        try {
+          evaluateConditionExpression(expr, ctx, false);
+        } catch (err: any) {
+          errors.push(`Failed to parse .if expression at ${originDesc}: ${err?.message || err}`);
+        }
+      } else {
+        try {
+          const value = evaluateConditionExpression(expr, ctx, true);
+          conditionResult = value !== 0;
+        } catch (err: any) {
+          errors.push(`Failed to evaluate .if at ${originDesc}: ${err?.message || err}`);
+          conditionResult = false;
+        }
+      }
+      const effective = parentActive && conditionResult;
+      ifStack.push({ effective, suppressed: !parentActive, origin: origins[i], lineIndex: i + 1 });
+      continue;
+    }
+
+    const blockActive = ifStack.length === 0 ? true : ifStack[ifStack.length - 1].effective;
+    if (!blockActive) continue;
+
+    if (/^\.print\b/i.test(line)) {
+      continue;
+    }
+
+    const tokens = line.split(/\s+/);
+    let pendingDirectiveLabel: string | null = null;
+    const isDirectiveToken = (value: string | undefined) => !!value && /^\.?(org|align)$/i.test(value);
 
     // simple constant / EQU handling: "NAME = expr" or "NAME EQU expr"
     if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
       const name = tokens[0];
       const rhs = tokens.slice(2).join(' ').trim();
-      // try numeric then label/const resolution
       let val: number | null = parseNumberFull(rhs);
       if (val === null) {
         if (consts.has(rhs)) val = consts.get(rhs)!;
@@ -208,7 +233,6 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       }
       continue;
     }
-    // also support forms with no whitespace tokens (e.g. "NAME=16") or explicit EQU
     const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
     if (assignMatch) {
       const name = assignMatch[1];
@@ -238,56 +262,51 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
 
     if (tokens[0].endsWith(':')) {
-      labelHere = tokens[0].slice(0, -1);
+      const candidate = tokens[0].slice(0, -1);
       tokens.shift();
-      const org = origins[i];
-      const scopeKey = scopes[i];
-      // local label
-      if (labelHere && labelHere[0] === '@') {
-        const localName = labelHere.slice(1);
-        let fileMap = localsIndex.get(scopeKey);
-        if (!fileMap) { fileMap = new Map(); localsIndex.set(scopeKey, fileMap); }
-        let arr = fileMap.get(localName);
-        if (!arr) { arr = []; fileMap.set(localName, arr); }
-        // assign a globally unique integer id for this local name
-        const gid = globalLocalCounters.get(localName) || 0;
-        globalLocalCounters.set(localName, gid + 1);
-        const key = '@' + localName + '_' + gid;
-        arr.push({ key, line: org ? org.line : i + 1 });
-        labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
+      const nextToken = tokens.length ? tokens[0] : '';
+      if (isDirectiveToken(nextToken)) {
+        pendingDirectiveLabel = candidate;
       } else {
-        const key = labelHere;
-        if (labels.has(key)) {
-          const prev = labels.get(key)!;
-          errors.push(`Duplicate label '${labelHere}' at ${i + 1} (previously at ${prev.line})`);
-        } else {
-          const org = origins[i];
-          labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
-        }
+        registerLabel(candidate, addr, origins[i], i + 1, scopes[i]);
       }
       if (!tokens.length) {
         continue;
       }
-    } else if (tokens.length >= 2 && /^\.?org$/i.test(tokens[1])) {
-      // bare label before a directive, e.g. "start .org 0x100"
-      labelHere = tokens[0];
+    } else if (tokens.length >= 2 && isDirectiveToken(tokens[1])) {
+      pendingDirectiveLabel = tokens[0];
       tokens.shift();
     }
 
     const op = tokens[0].toUpperCase();
 
-    if (op === 'DB') {
+    if (op === 'DB' || op === '.BYTE') {
       // DB value [,value]
-      const rest = line.slice(2).trim();
+      const rest = tokens.slice(1).join(' ').trim();
       const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
-      // account for multi-char quoted strings which emit multiple bytes
       for (const p of parts) {
-        if (/^'.*'$/.test(p)) {
-          // number of bytes equals number of characters inside quotes
-          addr += Math.max(0, p.length - 2);
-        } else {
           addr += 1;
+      }
+      continue;
+    }
+
+    if (op === 'DW' || op === '.WORD') {
+      const rest = tokens.slice(1).join(' ').trim();
+      if (!rest.length) {
+        errors.push(`Missing value for ${op} at ${originDesc}`);
+        continue;
+      }
+      const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      if (!parts.length) {
+        errors.push(`Missing value for ${op} at ${originDesc}`);
+        continue;
+      }
+      for (const part of parts) {
+        const parsed = parseWordLiteral(part);
+        if ('error' in parsed) {
+          errors.push(`${parsed.error} at ${originDesc}`);
         }
+        addr += 2;
       }
       continue;
     }
@@ -328,26 +347,52 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       addr = val;
       // .org defines a new (narrower) scope region for subsequent labels
       directiveCounter++;
-      if (labelHere) {
+      if (pendingDirectiveLabel) {
         const org = origins[i];
         const newScope = getScopeKey(org);
-        if (labelHere[0] === '@') {
-          const localName = labelHere.slice(1);
-          let fileMap = localsIndex.get(newScope);
-          if (!fileMap) { fileMap = new Map(); localsIndex.set(newScope, fileMap); }
-          let arr = fileMap.get(localName);
-          if (!arr) { arr = []; fileMap.set(localName, arr); }
-          const gid = globalLocalCounters.get(localName) || 0;
-          globalLocalCounters.set(localName, gid + 1);
-          const key = '@' + localName + '_' + gid;
-          arr.push({ key, line: org ? org.line : i + 1 });
-          labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
-        } else {
-          const key = labelHere;
-          if (labels.has(key)) errors.push(`Duplicate label ${labelHere} at ${i + 1}`);
-          labels.set(key, { addr, line: org ? org.line : i + 1, src: org && org.file ? path.basename(org.file) : (sourcePath ? path.basename(sourcePath) : undefined) });
-        }
+        const fallbackLine = org && typeof org.line === 'number' ? org.line : (i + 1);
+        registerLabel(pendingDirectiveLabel, addr, org, fallbackLine, newScope);
+        pendingDirectiveLabel = null;
       }
+      continue;
+    }
+
+    if (op === '.ALIGN' || op === 'ALIGN') {
+      const exprText = tokens.slice(1).join(' ').trim();
+      if (!exprText.length) {
+        errors.push(`Missing value for .align at ${originDesc}`);
+        continue;
+      }
+      const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: i + 1 };
+      let alignment = 0;
+      try {
+        alignment = evaluateConditionExpression(exprText, ctx, true);
+      } catch (err: any) {
+        errors.push(`Failed to evaluate .align at ${originDesc}: ${err?.message || err}`);
+        continue;
+      }
+      if (alignment <= 0) {
+        errors.push(`.align value must be positive at ${originDesc}`);
+        continue;
+      }
+      if ((alignment & (alignment - 1)) !== 0) {
+        errors.push(`.align value must be a power of two at ${originDesc}`);
+        continue;
+      }
+      const remainder = addr % alignment;
+      const alignedAddr = remainder === 0 ? addr : addr + (alignment - remainder);
+      if (alignedAddr > 0x10000) {
+        errors.push(`.align would move address beyond 0x10000 at ${originDesc}`);
+        continue;
+      }
+      alignDirectives[i] = { value: alignment };
+      if (pendingDirectiveLabel) {
+        const origin = origins[i];
+        const fallbackLine = origin && typeof origin.line === 'number' ? origin.line : (i + 1);
+        registerLabel(pendingDirectiveLabel, alignedAddr, origin, fallbackLine, scopes[i]);
+        pendingDirectiveLabel = null;
+      }
+      addr = alignedAddr;
       continue;
     }
 
@@ -437,6 +482,13 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     errors.push(`Unknown or unsupported opcode '${op}' at line ${i + 1}`);
   }
 
+  if (ifStack.length) {
+    for (let idx = ifStack.length - 1; idx >= 0; idx--) {
+      const frame = ifStack[idx];
+      errors.push(`Missing .endif for .if at ${describeOrigin(frame.origin, frame.lineIndex, sourcePath)}`);
+    }
+  }
+
   if (errors.length) return { success: false, errors, origins };
 
   // Second pass: generate bytes and source-line map
@@ -523,14 +575,119 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     return null;
   }
 
+  const ifStackSecond: IfFrame[] = [];
+
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
     const srcLine = i + 1;
-    const line = raw.replace(/\/\/.*$|;.*$/, '').trim();
+    const line = stripInlineComment(raw).trim();
     if (!line) continue;
+
+    const originDesc = describeOrigin(origins[i], srcLine, sourcePath);
+
+    const labelIfMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.if\b/i);
+    if (labelIfMatch && line[0] !== '.') {
+      errors.push(`Labels are not allowed on .if directives at ${originDesc}`);
+      continue;
+    }
+    const labelEndifMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.endif\b/i);
+    if (labelEndifMatch && line[0] !== '.') {
+      errors.push(`Labels are not allowed on .endif directives at ${originDesc}`);
+      continue;
+    }
+    const labelPrintMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.print\b/i);
+    if (labelPrintMatch && line[0] !== '.') {
+      errors.push(`Labels are not allowed on .print directives at ${originDesc}`);
+      continue;
+    }
+
+    const endifMatch = line.match(/^\.endif\b(.*)$/i);
+    if (endifMatch) {
+      const remainder = (endifMatch[1] || '').trim();
+      if (remainder.length) errors.push(`Unexpected tokens after .endif at ${originDesc}`);
+      if (!ifStackSecond.length) errors.push(`.endif without matching .if at ${originDesc}`);
+      else ifStackSecond.pop();
+      continue;
+    }
+
+    const ifMatch = line.match(/^\.if\b(.*)$/i);
+    if (ifMatch) {
+      const expr = (ifMatch[1] || '').trim();
+      const parentActive = ifStackSecond.length === 0 ? true : ifStackSecond[ifStackSecond.length - 1].effective;
+      if (!expr.length) {
+        errors.push(`Missing expression for .if at ${originDesc}`);
+        ifStackSecond.push({ effective: false, suppressed: !parentActive, origin: origins[i], lineIndex: srcLine });
+        continue;
+      }
+      const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: srcLine };
+      let conditionResult = false;
+      if (!parentActive) {
+        try {
+          evaluateConditionExpression(expr, ctx, false);
+        } catch (err: any) {
+          errors.push(`Failed to parse .if expression at ${originDesc}: ${err?.message || err}`);
+        }
+      } else {
+        try {
+          const value = evaluateConditionExpression(expr, ctx, true);
+          conditionResult = value !== 0;
+        } catch (err: any) {
+          errors.push(`Failed to evaluate .if at ${originDesc}: ${err?.message || err}`);
+          conditionResult = false;
+        }
+      }
+      const effective = parentActive && conditionResult;
+      ifStackSecond.push({ effective, suppressed: !parentActive, origin: origins[i], lineIndex: srcLine });
+      continue;
+    }
+
+    const blockActive = ifStackSecond.length === 0 ? true : ifStackSecond[ifStackSecond.length - 1].effective;
+    if (!blockActive) continue;
+
+    const printMatch = line.match(/^\.print\b(.*)$/i);
+    if (printMatch) {
+      map[srcLine] = addr;
+      const argsText = (printMatch[1] || '').trim();
+      const parts = argsText.length ? splitTopLevelArgs(argsText) : [];
+      const fragments: string[] = [];
+      const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: srcLine };
+      let failed = false;
+      for (const partRaw of parts) {
+        const part = partRaw.trim();
+        if (!part.length) continue;
+        try {
+          const literal = parseStringLiteral(part);
+          if (literal !== null) {
+            fragments.push(literal);
+            continue;
+          }
+        } catch (err: any) {
+          errors.push(`Invalid string literal in .print at ${originDesc}: ${err?.message || err}`);
+          failed = true;
+          break;
+        }
+        try {
+          const value = evaluateConditionExpression(part, ctx, true);
+          fragments.push(String(value));
+        } catch (err: any) {
+          errors.push(`Failed to evaluate .print expression '${part}' at ${originDesc}: ${err?.message || err}`);
+          failed = true;
+          break;
+        }
+      }
+      if (!failed) {
+        const output = fragments.length ? fragments.join(' ') : '';
+        try {
+          console.log(output);
+        } catch (err) {
+          // ignore console output errors
+        }
+      }
+      continue;
+    }
+
     if (/^[A-Za-z_][A-Za-z0-9_]*:$/.test(line)) continue; // label only
 
-    // handle optional leading label on the same line
     const tokens = line.split(/\s+/);
     let labelHere: string | null = null;
     if (tokens[0].endsWith(':')) {
@@ -544,7 +701,6 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     map[srcLine] = addr;
 
-    // skip simple constant definitions in second pass (NAME = expr, NAME=expr or NAME EQU expr)
     if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
       continue;
     }
@@ -554,25 +710,43 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
 
     const op = tokens[0].toUpperCase();
 
-    if (op === 'DB') {
-      const rest = line.slice(2).trim();
+    if (op === 'DB' || op === '.BYTE') {
+      const rest = tokens.slice(1).join(' ').trim();
       const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
       for (const p of parts) {
-        if (/^'.*'$/.test(p)) {
-          // multi-char string: emit each character as a byte
-          for (let k = 1; k < p.length - 1; k++) {
-            out.push(p.charCodeAt(k) & 0xff);
-            addr++;
-          }
-        } else {
-          let val = toByte(p);
-          if (val === null) {
-            errors.push(`Bad DB value '${p}' at ${srcLine}`);
-            val = 0;
-          }
-          out.push(val & 0xff);
-          addr++;
+        let val = toByte(p);
+        if (val === null) {
+          errors.push(`Bad ${op} value '${p}' at ${srcLine}`);
+          val = 0;
         }
+        out.push(val & 0xff);
+        addr++;
+      }
+      continue;
+    }
+
+    if (op === 'DW' || op === '.WORD') {
+      const rest = tokens.slice(1).join(' ').trim();
+      if (!rest.length) {
+        errors.push(`Missing value for ${op} at ${originDesc}`);
+        continue;
+      }
+      const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
+      if (!parts.length) {
+        errors.push(`Missing value for ${op} at ${originDesc}`);
+        continue;
+      }
+      for (const part of parts) {
+        const parsed = parseWordLiteral(part);
+        let value = 0;
+        if ('error' in parsed) {
+          errors.push(`${parsed.error} at ${originDesc}`);
+        } else {
+          value = parsed.value & 0xffff;
+        }
+        out.push(value & 0xff);
+        out.push((value >> 8) & 0xff);
+        addr += 2;
       }
       continue;
     }
@@ -580,9 +754,22 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     if (op === '.ORG' || op === 'ORG') {
       const aTok = tokens.slice(1).join(' ').trim().split(/\s+/)[0];
       const val = parseAddressToken(aTok, labels, consts);
-      if (val === null) { errors.push(`Bad ORG address '${aTok}' at ${srcLine}`); continue; }
+      if (val === null) { errors.push(`Bad ${op} address '${aTok}' at ${srcLine}`); continue; }
       addr = val;
       // label for this ORG (if present) was already registered in first pass; nothing to emit
+      continue;
+    }
+
+    if (op === '.ALIGN' || op === 'ALIGN') {
+      const directive = alignDirectives[i];
+      if (!directive) { continue; }
+      const alignment = directive.value;
+      if (alignment <= 0) { continue; }
+      const remainder = addr % alignment;
+      if (remainder === 0) { continue; }
+      const gap = alignment - remainder;
+      for (let k = 0; k < gap; k++) out.push(0);
+      addr += gap;
       continue;
     }
 
@@ -957,6 +1144,13 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     if (op === 'NOP') { out.push(0x00); addr += 1; continue; }
 
     errors.push(`Unhandled opcode '${op}' at ${srcLine}`);
+  }
+
+  if (ifStackSecond.length) {
+    for (let idx = ifStackSecond.length - 1; idx >= 0; idx--) {
+      const frame = ifStackSecond[idx];
+      errors.push(`Missing .endif for .if at ${describeOrigin(frame.origin, frame.lineIndex, sourcePath)}`);
+    }
   }
 
   if (errors.length) return { success: false, errors, origins };
