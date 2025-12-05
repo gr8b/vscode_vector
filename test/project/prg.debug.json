@@ -174,9 +174,9 @@
     "breakpoints": {
         "prg_main.asm": [
             {
-                "line": 8,
+                "line": 60,
                 "enabled": true,
-                "addr": "0x0100"
+                "addr": "0x015E"
             }
         ]
     }
