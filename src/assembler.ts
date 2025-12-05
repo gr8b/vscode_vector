@@ -159,6 +159,30 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     return lineText.slice(offset + token.length);
   }
 
+  // Helper to check if an expression likely contains unary < or > operators
+  // that would require expression evaluation rather than simple parsing
+  function containsLowHighByteOperators(expr: string): boolean {
+    // Simple check for < or > that aren't part of comparison operators
+    // This is a heuristic - the expression parser will handle the actual parsing
+    return expr.includes('<') || expr.includes('>');
+  }
+
+  // Helper to evaluate an expression with full expression parser support
+  // Used for constants and immediate values that may use < or > operators
+  function evaluateExpressionValue(
+    expr: string, 
+    lineIndex: number, 
+    errorLabel: string
+  ): { value: number | null; error?: string } {
+    const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex };
+    try {
+      const value = evaluateConditionExpression(expr, ctx, true);
+      return { value };
+    } catch (err: any) {
+      return { value: null, error: `${errorLabel}: ${err?.message || err}` };
+    }
+  }
+
   // First pass: labels and address calculation
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i];
@@ -257,13 +281,9 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
       }
       // If still null and expression contains < or >, try evaluating as expression
-      if (val === null && (rhs.includes('<') || rhs.includes('>'))) {
-        const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: i + 1 };
-        try {
-          val = evaluateConditionExpression(rhs, ctx, true);
-        } catch (err: any) {
-          // Fall through to error below
-        }
+      if (val === null && containsLowHighByteOperators(rhs)) {
+        const result = evaluateExpressionValue(rhs, i + 1, `Bad constant value '${rhs}' for ${name}`);
+        val = result.value;
       }
       if (val === null) {
         errors.push(`Bad constant value '${rhs}' for ${name} at ${i + 1}`);
@@ -282,13 +302,9 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
       }
       // If still null and expression contains < or >, try evaluating as expression
-      if (val === null && (rhs.includes('<') || rhs.includes('>'))) {
-        const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: i + 1 };
-        try {
-          val = evaluateConditionExpression(rhs, ctx, true);
-        } catch (err: any) {
-          // Fall through to error below
-        }
+      if (val === null && containsLowHighByteOperators(rhs)) {
+        const result = evaluateExpressionValue(rhs, i + 1, `Bad constant value '${rhs}' for ${name}`);
+        val = result.value;
       }
       if (val === null) errors.push(`Bad constant value '${rhs}' for ${name} at ${i + 1}`);
       else consts.set(name, val);
@@ -304,13 +320,9 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
       }
       // If still null and expression contains < or >, try evaluating as expression
-      if (val === null && (rhs.includes('<') || rhs.includes('>'))) {
-        const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: i + 1 };
-        try {
-          val = evaluateConditionExpression(rhs, ctx, true);
-        } catch (err: any) {
-          // Fall through to error below
-        }
+      if (val === null && containsLowHighByteOperators(rhs)) {
+        const result = evaluateExpressionValue(rhs, i + 1, `Bad constant value '${rhs}' for ${name}`);
+        val = result.value;
       }
       if (val === null) errors.push(`Bad constant value '${rhs}' for ${name} at ${i + 1}`);
       else consts.set(name, val);
