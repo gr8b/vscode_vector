@@ -91,6 +91,13 @@ node .\scripts\run-assembler.js
 C:\Work\Programming\devector\bin\devector.exe .\test.rom
 ```
 
+VS Code editor helpers
+----------------------
+
+The bundled extension now exposes quality-of-life helpers whenever you edit `.asm` sources in VS Code:
+
+- **Ctrl+click navigation for includes**: hold `Ctrl` (or `Cmd` on macOS) to underline the path in the ASM '.include' directive and click it to open the target file.
+
 Emulator panel controls
 -----------------------
 

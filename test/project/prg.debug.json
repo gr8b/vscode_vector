@@ -114,6 +114,15 @@
                 "line": 9,
                 "enabled": true,
                 "addr": "0x0100"
+            },
+            {
+                "line": 22,
+                "enabled": true,
+                "addr": "0x011A"
+            },
+            {
+                "line": 82,
+                "enabled": true
             }
         ]
     }
