@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { assembleAndWrite } from './assembler';
 import type { PrintMessage } from './assembler/types';
-import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, stepFramePanel, reloadEmulatorBreakpointsFromFile, resolveEmulatorHoverSymbol, isEmulatorPanelPaused, resolveDataDirectiveHover } from './emulatorUI';
+import { openEmulatorPanel, pauseEmulatorPanel, resumeEmulatorPanel, stepFramePanel, reloadEmulatorBreakpointsFromFile, resolveEmulatorHoverSymbol, isEmulatorPanelPaused, resolveDataDirectiveHover, resolveInstructionHover } from './emulatorUI';
 
 export function activate(context: vscode.ExtensionContext) {
   const devectorOutput = vscode.window.createOutputChannel('Devector');
@@ -1011,6 +1011,20 @@ export function activate(context: vscode.ExtensionContext) {
       if (identifier && !identifier.startsWith('.')) {
         const symbol = resolveEmulatorHoverSymbol(identifier, filePath ? { filePath, line: position.line + 1 } : undefined);
         if (symbol) {
+          if (symbol.kind === 'line') {
+            const instructionHover = resolveInstructionHover(document, position, symbol.value);
+            if (instructionHover) {
+              const addrHex = '0x' + instructionHover.address.toString(16).toUpperCase().padStart(4, '0');
+              const memBytes = instructionHover.bytes.map(b => '0x' + b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+              const md = new vscode.MarkdownString(undefined, true);
+              md.appendMarkdown(`${instructionHover.display}\n\n`);
+              md.appendMarkdown(`- address: \`${addrHex}/${instructionHover.address}\`\n`);
+              md.appendMarkdown(`- memory: \`${memBytes}\``);
+              md.isTrusted = false;
+              return new vscode.Hover(md, wordRange);
+            }
+          }
+
           const numericValue = Math.trunc(symbol.value);
           if (Number.isFinite(numericValue)) {
             const normalized16 = ((numericValue % 0x10000) + 0x10000) % 0x10000;

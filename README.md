@@ -118,6 +118,16 @@ Symbol hover hints while paused
 
 When the emulator is paused (manually or because it hit a breakpoint) you can hover any label or named constant in an `.asm` file that belongs to the loaded ROM and VS Code shows a tooltip with both the hexadecimal and decimal value. The hint data comes directly from the ROM’s `.debug.json` metadata, so it works for symbols introduced through `.include` chains as well. This is handy for confirming the current address/value of a label without opening the token file or dumping registers.
 
+When you hover over an assembled instruction (the mnemonic or register portion of the line—not the immediate literal) the extension now reads the underlying opcode bytes from the paused emulator, disassembles the operands, and shows the resolved value alongside the backing memory bytes. Example:
+
+```
+lxi h, 0x40A0
+address: 0x0102/258
+memory: 0x21 0xA0 0x40
+```
+
+The tooltip length automatically matches the instruction length reported by `CPU.GetInstrLen`, so multi-byte opcodes such as `J*`, `C*`, `STA/LDA`, `IN/OUT`, and the byte-immediate ALU ops all display their encoded operands with no manual math.
+
 Data directives (`DB`/`.byte`, `DW`/`.word`). The specific values are highlighted while paused (blue for reads, red for writes). Hovering a highlighted value shows the live memory at that address (hex + decimal) from the paused emulator.
 
 Memory Dump panel
