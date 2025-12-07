@@ -5,6 +5,13 @@
 
 .org 0x100
 start:
+			VAR1 .var 1;
+			mvi a, VAR1
+			VAR1 = VAR1 + 1
+			mvi a, VAR1
+			VAR1 = VAR1 + 1
+			mvi c, VAR1
+
 			lxi sp, 0x8000
 			lxi b, 0
 			lxi d, 0

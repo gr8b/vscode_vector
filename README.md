@@ -302,6 +302,22 @@ MAX_SIZE = 100
 ```
 
 Typical use cases include guardrails for configuration constants, macro argument validation, and short-circuiting builds when a derived value falls outside a legal range.
+- `.var Name value`: declares a mutable variable whose value can be reassigned later in the file (or inside macros). Unlike `=` or `EQU`, `.var` establishes an initial value but can be updated with either direct assignments (`Counter = Counter - 1`) or a subsequent `EQU`. The symbol participates in all expression contexts just like any other constant.
+
+```
+ImmutableConst = 1      ; Initialize constant
+                        ; Emits: 0x01
+
+Counter .var 10         ; Initialize variable
+db Counter              ; Emits: 0x0A
+
+Counter = Counter - 1   ; Update with expression
+db Counter              ; Emits: 0x09
+
+Counter equ 5           ; Update with EQU
+db Counter              ; Emits: 0x05
+```
+
 - `.align value`: pad the output with zero bytes until the program counter reaches the next multiple of `value`, then resume emitting instructions. The argument can be any expression understood by the `.if` evaluator, must be positive, and has to be a power of two (1, 2, 4, 8, ...). If the current address is already aligned no padding is emitted. Example:
 
 ```
