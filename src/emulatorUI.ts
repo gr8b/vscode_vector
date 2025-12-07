@@ -931,6 +931,59 @@ function clearHighlightedSourceLine() {
   lastHighlightedEditor = null;
 }
 
+function isSkippableHighlightLine(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return true;
+  if (trimmed.startsWith(';') || trimmed.startsWith('//')) return true;
+  const colonIdx = trimmed.indexOf(':');
+  if (colonIdx >= 0) {
+    const before = trimmed.slice(0, colonIdx).trim();
+    const after = trimmed.slice(colonIdx + 1).trim();
+    if (/^[A-Za-z_.$@?][\w.$@?]*$/.test(before) && (!after || after.startsWith(';') || after.startsWith('//'))) {
+      return true;
+    }
+  }
+  const equMatch = trimmed.match(/^([A-Za-z_.$@?][\w.$@?]*)\s+(equ)\b/i);
+  if (equMatch && !trimmed.includes(':')) return true;
+  const eqIdx = trimmed.indexOf('=');
+  if (eqIdx > 0) {
+    const lhs = trimmed.slice(0, eqIdx).trim();
+    const rhs = trimmed.slice(eqIdx + 1).trim();
+    if (/^[A-Za-z_.$@?][\w.$@?]*$/.test(lhs) && rhs && !rhs.startsWith(';') && !trimmed.includes(':')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolvePreferredHighlightLine(filePath: string, addr: number, doc?: vscode.TextDocument): number | undefined {
+  if (!lastSymbolCache || !lastSymbolCache.lineAddresses.size) return undefined;
+  const fileKey = normalizeFileKey(filePath);
+  if (!fileKey) return undefined;
+  const perLine = lastSymbolCache.lineAddresses.get(fileKey);
+  if (!perLine || perLine.size === 0) return undefined;
+  const normalizedAddr = addr & 0xffff;
+  const candidates: number[] = [];
+  for (const [lineNumber, lineAddr] of perLine.entries()) {
+    if ((lineAddr & 0xffff) === normalizedAddr) {
+      candidates.push(lineNumber);
+    }
+  }
+  if (!candidates.length) return undefined;
+  candidates.sort((a, b) => b - a);
+  if (doc) {
+    for (const lineNumber of candidates) {
+      const idx = lineNumber - 1;
+      if (idx < 0 || idx >= doc.lineCount) continue;
+      const text = doc.lineAt(idx).text;
+      if (!isSkippableHighlightLine(text)) {
+        return lineNumber;
+      }
+    }
+  }
+  return candidates[0];
+}
+
 function highlightSourceFromHardware(hardware: Hardware | undefined | null) {
   if (!hardware || !highlightContext) return;
   try {
@@ -946,7 +999,8 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
   if (!highlightContext || addr === undefined || addr === null) return;
   ensureHighlightDecoration(highlightContext);
   if (!pausedLineDecoration || !lastAddressSourceMap || lastAddressSourceMap.size === 0) return;
-  const info = lastAddressSourceMap.get(addr & 0xffff);
+  const normalizedAddr = addr & 0xffff;
+  const info = lastAddressSourceMap.get(normalizedAddr);
   if (!info) return;
   const targetPath = path.resolve(info.file);
   const run = async () => {
@@ -964,9 +1018,10 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
       if (!editor) {
         editor = await vscode.window.showTextDocument(doc, { preview: false, preserveFocus: false });
       }
+      const preferredLine = resolvePreferredHighlightLine(targetPath, normalizedAddr, doc) ?? info.line;
       const totalLines = doc.lineCount;
       if (totalLines === 0) return;
-      const idx = Math.min(Math.max(info.line - 1, 0), totalLines - 1);
+      const idx = Math.min(Math.max(preferredLine - 1, 0), totalLines - 1);
       const lineText = doc.lineAt(idx).text;
       const range = new vscode.Range(idx, 0, idx, Math.max(lineText.length, 1));
       const decoration: vscode.DecorationOptions = {
