@@ -264,6 +264,8 @@ Nested macros are supported (up to 32 levels deep), but you cannot open another 
 
 ### FDD utility CLI
 
+The FDD utility tool is a command-line tool that reads and writes FDD images, and adds files to the image. It is useful for creating custom FDD images for the Vector 06c emulator.
+
 ```pwsh
 npm run compile # make sure out/tools/fddutil.js exists
 node .\out\tools\fddutil.js -h
@@ -276,20 +278,3 @@ Key switches:
 - `-i <file>` adds a host file into the image; repeat the flag for each additional file.
 - `-o <file>` writes the resulting `.fdd` image.
 - `-h` prints the usage summary.
-
-
-- If you want a single npm script that compiles, assembles, updates labels, and runs the emulator, you can add an npm script to `package.json`. Example:
-
-```json
-"scripts": {
-  "assemble:run": "npm run compile && node ./scripts/run-assembler.js && node ./scripts/update-test-json.js && C:\\Work\\Programming\\devector\\bin\\devector.exe .\\test.rom"
-}
-```
-
-Adjust the emulator path to the location of `devector.exe` on your machine.
-
-## Implementation notes
-
-- `src/assembler/utils.ts`: houses `encodeTextToBytes`, `parseTextLiteralToBytes`, and text case helpers used by `.encoding` / `.text`.
-- `src/assembler.ts`: runs `.encoding`/`.text` handling in both passes so address calculation and byte emission stay in sync.
-- `test/assembler/directives/`: now includes fixtures for every `.encoding` type/case option plus `.text` edge cases (escapes, labels, errors) that are wired into `run_directive_tests.ts`.
