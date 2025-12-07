@@ -14,8 +14,7 @@ import { disposeHardwareStatsTracking, resetHardwareStatsTracking, tryCollectHar
 import { parseAddressLike } from './emulatorUI/utils';
 import { KbOperation } from './emulator/keyboard';
 
-const log_every_frame = false;
-const log_tick_to_file = false;
+const log_tick_to_file = true;
 
 type SourceLineRef = { file: string; line: number };
 
@@ -59,7 +58,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     const candidates = await vscode.window.showOpenDialog({
       canSelectMany: false,
       defaultUri,
-      filters: { 'ROM': ['rom', 'bin', '*'] }
+      filters: { 'ROM': ['rom', 'bin'] }
     });
     return candidates && candidates.length ? candidates[0].fsPath : '';
   };
@@ -136,7 +135,10 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         }
       }
       catch (e) {}
-      try { if (debugStream) { debugStream.end(); } }
+      try {
+        if (debugStream) {
+          debugStream.end();
+        } }
       catch (ee) {}
     }, null, context.subscriptions
   );
@@ -151,7 +153,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
   // attach per-instruction callback to hardware (if available)
   try {
-    if (log_every_frame && emu.hardware) {
+    if (log_tick_to_file && emu.hardware) {
       emu.hardware.debugInstructionCallback = (hw) => {
         try {
           const line = getDebugLine(hw)
@@ -380,7 +382,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   panel.onDidDispose(() => {
     // Stop the emulation hardware thread to free resources
     try { emu.hardware?.Request(HardwareReq.EXIT); } catch (e) {}
-    try { if (debugStream) { debugStream.end(); } } catch (e) {}
+
+    try {
+      if (debugStream) {
+        debugStream.end();
+      }
+    } catch (e) {}
+
     currentPanelController = null;
     lastBreakpointSource = null;
     clearHighlightedSourceLine();
