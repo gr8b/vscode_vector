@@ -37,7 +37,9 @@ let dataLineSpanCache: DataLineCache | null = null;
 let dataAddressLookup: Map<number, DataAddressEntry> | null = null;
 let highlightContext: vscode.ExtensionContext | null = null;
 let pausedLineDecoration: vscode.TextEditorDecorationType | null = null;
+let unmappedAddressDecoration: vscode.TextEditorDecorationType | null = null;
 let lastHighlightedEditor: vscode.TextEditor | null = null;
+let lastHighlightedLine: number | null = null;
 let currentToolbarIsRunning = true;
 let dataReadDecoration: vscode.TextEditorDecorationType | null = null;
 let dataWriteDecoration: vscode.TextEditorDecorationType | null = null;
@@ -912,23 +914,39 @@ function cacheSymbolMetadata(tokens: any, tokenPath?: string) {
 }
 
 function ensureHighlightDecoration(context: vscode.ExtensionContext) {
-  if (pausedLineDecoration) return;
-  pausedLineDecoration = vscode.window.createTextEditorDecorationType({
-    isWholeLine: true,
-    backgroundColor: 'rgba(129, 127, 38, 0.45)',
-    overviewRulerColor: 'rgba(200, 200, 175, 0.8)',
-    overviewRulerLane: vscode.OverviewRulerLane.Full
-  });
-  context.subscriptions.push(pausedLineDecoration);
+  if (!pausedLineDecoration) {
+    pausedLineDecoration = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: 'rgba(129, 127, 38, 0.45)',
+      overviewRulerColor: 'rgba(200, 200, 175, 0.8)',
+      overviewRulerLane: vscode.OverviewRulerLane.Full
+    });
+    context.subscriptions.push(pausedLineDecoration);
+  }
+  if (!unmappedAddressDecoration) {
+    unmappedAddressDecoration = vscode.window.createTextEditorDecorationType({
+      isWholeLine: true,
+      backgroundColor: 'rgba(200, 180, 0, 0.35)',
+      overviewRulerColor: 'rgba(255, 220, 100, 0.8)',
+      overviewRulerLane: vscode.OverviewRulerLane.Full
+    });
+    context.subscriptions.push(unmappedAddressDecoration);
+  }
 }
 
 function clearHighlightedSourceLine() {
-  if (pausedLineDecoration && lastHighlightedEditor) {
+  if (lastHighlightedEditor) {
     try {
-      lastHighlightedEditor.setDecorations(pausedLineDecoration, []);
+      if (pausedLineDecoration) {
+        lastHighlightedEditor.setDecorations(pausedLineDecoration, []);
+      }
+      if (unmappedAddressDecoration) {
+        lastHighlightedEditor.setDecorations(unmappedAddressDecoration, []);
+      }
     } catch (e) { /* ignore decoration clearing errors */ }
   }
   lastHighlightedEditor = null;
+  lastHighlightedLine = null;
 }
 
 function isSkippableHighlightLine(text: string): boolean {
@@ -998,10 +1016,59 @@ function highlightSourceFromHardware(hardware: Hardware | undefined | null) {
 function highlightSourceAddress(addr?: number, debugLine?: string) {
   if (!highlightContext || addr === undefined || addr === null) return;
   ensureHighlightDecoration(highlightContext);
-  if (!pausedLineDecoration || !lastAddressSourceMap || lastAddressSourceMap.size === 0) return;
+  
   const normalizedAddr = addr & 0xffff;
+  
+  // Check if we have a source map and if this address is mapped
+  if (!lastAddressSourceMap || lastAddressSourceMap.size === 0) {
+    // No source map at all - clear any previous highlights
+    clearHighlightedSourceLine();
+    return;
+  }
+  
   const info = lastAddressSourceMap.get(normalizedAddr);
-  if (!info) return;
+  
+  // Handle unmapped address case: show yellow highlight with explanation
+  if (!info) {
+    // Save reference to the currently highlighted editor and line before clearing
+    const editorToUse = lastHighlightedEditor;
+    const lineToUse = lastHighlightedLine;
+    
+    // Clear previous highlight decorations
+    clearHighlightedSourceLine();
+    
+    // If we have an editor with a previous highlight, show the unmapped indicator there
+    if (editorToUse && unmappedAddressDecoration && lineToUse !== null) {
+      try {
+        const doc = editorToUse.document;
+        const idx = Math.min(Math.max(lineToUse, 0), doc.lineCount - 1);
+        const lineText = doc.lineAt(idx).text;
+        const range = new vscode.Range(idx, 0, idx, Math.max(lineText.length, 1));
+        const addrHex = '0x' + normalizedAddr.toString(16).toUpperCase().padStart(4, '0');
+        const decoration: vscode.DecorationOptions = {
+          range,
+          renderOptions: {
+            after: {
+              contentText: `  No source mapping for address ${addrHex} - executing unmapped code`,
+              color: '#ffcc00',
+              fontStyle: 'italic',
+              fontWeight: 'normal'
+            }
+          }
+        };
+        editorToUse.setDecorations(unmappedAddressDecoration, [decoration]);
+        lastHighlightedEditor = editorToUse;  // Restore the reference
+        lastHighlightedLine = idx;  // Restore the line number
+      } catch (err) {
+        /* ignore unmapped decoration errors */
+      }
+    }
+    return;
+  }
+  
+  // We have a mapping - show normal green highlight
+  if (!pausedLineDecoration) return;
+  
   const targetPath = path.resolve(info.file);
   const run = async () => {
     try {
@@ -1039,6 +1106,7 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
       editor.setDecorations(pausedLineDecoration!, [decoration]);
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
       lastHighlightedEditor = editor;
+      lastHighlightedLine = idx;
     } catch (err) {
       /* ignore highlight errors */
     }
