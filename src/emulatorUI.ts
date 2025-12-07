@@ -39,6 +39,7 @@ let highlightContext: vscode.ExtensionContext | null = null;
 let pausedLineDecoration: vscode.TextEditorDecorationType | null = null;
 let unmappedAddressDecoration: vscode.TextEditorDecorationType | null = null;
 let lastHighlightedEditor: vscode.TextEditor | null = null;
+let lastHighlightedLine: number | null = null;
 let currentToolbarIsRunning = true;
 let dataReadDecoration: vscode.TextEditorDecorationType | null = null;
 let dataWriteDecoration: vscode.TextEditorDecorationType | null = null;
@@ -945,6 +946,7 @@ function clearHighlightedSourceLine() {
     } catch (e) { /* ignore decoration clearing errors */ }
   }
   lastHighlightedEditor = null;
+  lastHighlightedLine = null;
 }
 
 function isSkippableHighlightLine(text: string): boolean {
@@ -1028,20 +1030,20 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
   
   // Handle unmapped address case: show yellow highlight with explanation
   if (!info) {
-    // Save reference to the currently highlighted editor before clearing
+    // Save reference to the currently highlighted editor and line before clearing
     const editorToUse = lastHighlightedEditor;
+    const lineToUse = lastHighlightedLine;
     
     // Clear previous highlight decorations
     clearHighlightedSourceLine();
     
     // If we have an editor with a previous highlight, show the unmapped indicator there
-    if (editorToUse && unmappedAddressDecoration) {
+    if (editorToUse && unmappedAddressDecoration && lineToUse !== null) {
       try {
         const doc = editorToUse.document;
-        const currentLine = editorToUse.selection.active.line;
-        const idx = Math.min(Math.max(currentLine, 0), doc.lineCount - 1);
+        const idx = Math.min(Math.max(lineToUse, 0), doc.lineCount - 1);
         const lineText = doc.lineAt(idx).text;
-        const range = new vscode.Range(idx, 0, idx, Math.max(lineText.length, 1));
+        const range = new vscode.Range(idx, 0, idx, lineText.length);
         const addrHex = '0x' + normalizedAddr.toString(16).toUpperCase().padStart(4, '0');
         const decoration: vscode.DecorationOptions = {
           range,
@@ -1056,6 +1058,7 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
         };
         editorToUse.setDecorations(unmappedAddressDecoration, [decoration]);
         lastHighlightedEditor = editorToUse;  // Restore the reference
+        lastHighlightedLine = idx;  // Restore the line number
       } catch (err) {
         /* ignore unmapped decoration errors */
       }
@@ -1087,7 +1090,7 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
       if (totalLines === 0) return;
       const idx = Math.min(Math.max(preferredLine - 1, 0), totalLines - 1);
       const lineText = doc.lineAt(idx).text;
-      const range = new vscode.Range(idx, 0, idx, Math.max(lineText.length, 1));
+      const range = new vscode.Range(idx, 0, idx, lineText.length);
       const decoration: vscode.DecorationOptions = {
         range,
         renderOptions: debugLine ? {
@@ -1103,6 +1106,7 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
       editor.setDecorations(pausedLineDecoration!, [decoration]);
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
       lastHighlightedEditor = editor;
+      lastHighlightedLine = idx;
     } catch (err) {
       /* ignore highlight errors */
     }
