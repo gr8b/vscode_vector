@@ -462,6 +462,77 @@ const tests: DirectiveTestCase[] = [
             success: false,
             errorsContains: ['Address high byte is', '18', 'at label', '256']
         }
+    },
+    {
+        name: '.var creates a variable with initial value',
+        sourceFile: 'var_basic.asm',
+        expect: {
+            bytes: [0x0A, 0x05],  // 10, 5
+            consts: {
+                Counter: 5  // Final value after reassignment
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: '.var allows updates using expressions',
+        sourceFile: 'var_expression.asm',
+        expect: {
+            bytes: [0x0A, 0x09],  // 10, 9 (10 - 1)
+            consts: {
+                Counter: 9  // Final value
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: '.var allows updates using EQU',
+        sourceFile: 'var_equ_update.asm',
+        expect: {
+            bytes: [0x14, 0x1E],  // 20, 30
+            consts: {
+                Value: 30  // Final value
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Constants cannot be reassigned',
+        sourceFile: 'var_constant_error.asm',
+        expect: {
+            success: false,
+            errorsContains: ['Cannot reassign constant']
+        }
+    },
+    {
+        name: 'Labels are not allowed on .var directives',
+        sourceFile: 'var_label_error.asm',
+        expect: {
+            success: false,
+            errorsContains: ['Labels are not allowed on .var directives']
+        }
+    },
+    {
+        name: '.var requires an initial value',
+        sourceFile: 'var_missing_value.asm',
+        expect: {
+            success: false,
+            errorsContains: ['Missing initial value for .var']
+        }
+    },
+    {
+        name: '.var comprehensive test with multiple operations',
+        sourceFile: 'var_comprehensive.asm',
+        expect: {
+            bytes: [0x0A, 0x05, 0x08, 0x10, 0x21, 0x64, 0xC8, 0x96, 0xC8],  // 10, 5, 8, 16, 33, 100, 200, 150, 200
+            consts: {
+                Counter: 16,
+                Offset: 0x20,
+                Var1: 150,
+                Var2: 200
+            },
+            noWarnings: true
+        }
     }
 ];
 
