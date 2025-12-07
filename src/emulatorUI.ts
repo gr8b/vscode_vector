@@ -14,7 +14,7 @@ import { disposeHardwareStatsTracking, resetHardwareStatsTracking, tryCollectHar
 import { parseAddressLike } from './emulatorUI/utils';
 import { KbOperation } from './emulator/keyboard';
 
-const log_tick_to_file = true;
+const log_tick_to_file = false;
 
 type SourceLineRef = { file: string; line: number };
 
@@ -140,6 +140,18 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
           debugStream.end();
         } }
       catch (ee) {}
+
+      currentPanelController = null;
+      lastBreakpointSource = null;
+      clearHighlightedSourceLine();
+      lastAddressSourceMap = null;
+      clearDataLineHighlights();
+      lastDataAccessSnapshot = null;
+      clearSymbolMetadataCache();
+      highlightContext = null;
+      resetMemoryDumpState();
+      disposeHardwareStatsTracking();
+
     }, null, context.subscriptions
   );
 
@@ -378,28 +390,6 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
   emitToolbarState(true);
   tick();
-
-  panel.onDidDispose(() => {
-    // Stop the emulation hardware thread to free resources
-    try { emu.hardware?.Request(HardwareReq.EXIT); } catch (e) {}
-
-    try {
-      if (debugStream) {
-        debugStream.end();
-      }
-    } catch (e) {}
-
-    currentPanelController = null;
-    lastBreakpointSource = null;
-    clearHighlightedSourceLine();
-    lastAddressSourceMap = null;
-    clearDataLineHighlights();
-    lastDataAccessSnapshot = null;
-    clearSymbolMetadataCache();
-    highlightContext = null;
-    resetMemoryDumpState();
-    disposeHardwareStatsTracking();
-  }, null, context.subscriptions);
 }
 
 export function reloadEmulatorBreakpointsFromFile(): number {
