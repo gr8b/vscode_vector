@@ -12,6 +12,7 @@ import { getDebugLine, getDebugState } from './emulatorUI/debugOutput';
 import { handleMemoryDumpControlMessage, resetMemoryDumpState, updateMemoryDumpFromHardware } from './emulatorUI/memoryDump';
 import { disposeHardwareStatsTracking, resetHardwareStatsTracking, tryCollectHardwareStats } from './emulatorUI/hardwareStats';
 import { parseAddressLike } from './emulatorUI/utils';
+import { KbOperation } from './emulator/keyboard';
 
 const log_every_frame = false;
 const log_tick_to_file = false;
@@ -307,15 +308,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   panel.webview.onDidReceiveMessage(msg => {
     if (msg && msg.type === 'key') {
       // keyboard events: forward to keyboard handling
-      // const op = (keyboard as any).KeyHandling(msg.code, msg.kind === 'down' ? 'down' : 'up');
-      // if (op === 'RESTART') {
-      //   // quick restart: reload ROM and reset PC/SP
-      //   if (romBuf) {
-      //     emu.load(Buffer.from(romBuf), 0x0100);
-      //     emu.regs.PC = 0x0000;
-      //     emu.regs.SP = 0x0000;
-      //   }
-      // }
+      const op = emu.hardware?.keyboard?.KeyHandling(msg.code, msg.kind === 'down' ? 'down' : 'up') ?? KbOperation.NONE;
+      if (op === KbOperation.RESET) {
+        emu.hardware?.Request(HardwareReq.RESET);
+      }
+      else if (op === KbOperation.RESTART) {
+        emu.hardware?.Request(HardwareReq.RESTART);
+      }
     } else if (msg && msg.type === 'stop') {
       emu.hardware?.Request(HardwareReq.STOP);
       emitToolbarState(false);
