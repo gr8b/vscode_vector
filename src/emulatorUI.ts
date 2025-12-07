@@ -38,6 +38,8 @@ let dataAddressLookup: Map<number, DataAddressEntry> | null = null;
 let highlightContext: vscode.ExtensionContext | null = null;
 let pausedLineDecoration: vscode.TextEditorDecorationType | null = null;
 let lastHighlightedEditor: vscode.TextEditor | null = null;
+let lastHighlightAddress: number | undefined = undefined;
+let lastHighlightDebugLine: string | undefined = undefined;
 let currentToolbarIsRunning = true;
 let dataReadDecoration: vscode.TextEditorDecorationType | null = null;
 let dataWriteDecoration: vscode.TextEditorDecorationType | null = null;
@@ -198,6 +200,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     postToolbarState(isRunning);
     if (isRunning) {
       clearHighlightedSourceLine();
+      // Clear saved highlight state when resuming
+      lastHighlightAddress = undefined;
+      lastHighlightDebugLine = undefined;
       clearDataLineHighlights();
       lastDataAccessSnapshot = null;
       try {
@@ -335,8 +340,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   }, null, context.subscriptions);
 
   const editorVisibilityDisposable = vscode.window.onDidChangeVisibleTextEditors(() => {
-    if (!currentToolbarIsRunning && lastDataAccessSnapshot) {
-      applyDataLineHighlightsFromSnapshot(lastDataAccessSnapshot);
+    if (!currentToolbarIsRunning) {
+      // Reapply paused line highlight when editors become visible again
+      reapplyPausedLineHighlight();
+      // Also reapply data line highlights if available
+      if (lastDataAccessSnapshot) {
+        applyDataLineHighlightsFromSnapshot(lastDataAccessSnapshot);
+      }
     }
   });
   context.subscriptions.push(editorVisibilityDisposable);
@@ -382,6 +392,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     currentPanelController = null;
     lastBreakpointSource = null;
     clearHighlightedSourceLine();
+    // Clear saved highlight state on panel disposal
+    lastHighlightAddress = undefined;
+    lastHighlightDebugLine = undefined;
     lastAddressSourceMap = null;
     clearDataLineHighlights();
     lastDataAccessSnapshot = null;
@@ -929,6 +942,16 @@ function clearHighlightedSourceLine() {
     } catch (e) { /* ignore decoration clearing errors */ }
   }
   lastHighlightedEditor = null;
+  // NOTE: We intentionally do NOT clear lastHighlightAddress and lastHighlightDebugLine here
+  // because they are used to restore the highlight when editors change visibility.
+  // They are cleared explicitly when the emulator resumes or when the panel is disposed.
+}
+
+function reapplyPausedLineHighlight() {
+  // Reapply the paused line highlight if we have saved state
+  if (lastHighlightAddress !== undefined && !currentToolbarIsRunning) {
+    highlightSourceAddress(lastHighlightAddress, lastHighlightDebugLine);
+  }
 }
 
 function isSkippableHighlightLine(text: string): boolean {
@@ -1002,6 +1025,11 @@ function highlightSourceAddress(addr?: number, debugLine?: string) {
   const normalizedAddr = addr & 0xffff;
   const info = lastAddressSourceMap.get(normalizedAddr);
   if (!info) return;
+  
+  // Save the highlight state for restoration when editors change visibility
+  lastHighlightAddress = normalizedAddr;
+  lastHighlightDebugLine = debugLine;
+  
   const targetPath = path.resolve(info.file);
   const run = async () => {
     try {
