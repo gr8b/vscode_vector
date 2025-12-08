@@ -19,7 +19,7 @@ const log_tick_to_file = false;
 
 type SourceLineRef = { file: string; line: number };
 
-let lastBreakpointSource: { romPath: string; debugPath?: string; hardware?: Hardware | null; log?: vscode.OutputChannel } | null = null;
+let lastBreakpointSource: { programPath: string; debugPath?: string; hardware?: Hardware | null; log?: vscode.OutputChannel } | null = null;
 let lastAddressSourceMap: Map<number, SourceLineRef> | null = null;
 type SymbolMeta = { value: number; kind: 'label' | 'const' };
 type SymbolCache = {
@@ -48,34 +48,34 @@ let lastDataAccessSnapshot: MemoryAccessSnapshot | null = null;
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
 
-type OpenEmulatorOptions = { romPath?: string; debugPath?: string };
+type OpenEmulatorOptions = { programPath?: string; romPath?: string; debugPath?: string };
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel, options?: OpenEmulatorOptions)
 {
-  const pickRomFromDialog = async (): Promise<string> => {
+  const pickProgramFromDialog = async (): Promise<string> => {
     const defaultUri = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length
       ? vscode.Uri.file(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'test.rom'))
       : undefined;
     const candidates = await vscode.window.showOpenDialog({
       canSelectMany: false,
       defaultUri,
-      filters: { 'ROM': ['rom', 'bin'] }
+      filters: { 'File': ['rom', 'fdd'] }
     });
     return candidates && candidates.length ? candidates[0].fsPath : '';
   };
 
-  let romPath = (options?.romPath || '').trim();
-  if (!romPath) {
-    romPath = await pickRomFromDialog();
+  let programPath = (options?.programPath || options?.romPath || '').trim();
+  if (!programPath) {
+    programPath = await pickProgramFromDialog();
   }
 
-  if (!romPath) {
-    vscode.window.showWarningMessage('ROM selection cancelled. Emulator not started.');
+  if (!programPath) {
+    vscode.window.showWarningMessage('File selection cancelled. Emulator not started.');
     return;
   }
 
-  if (!fs.existsSync(romPath)) {
-    vscode.window.showErrorMessage(`ROM file not found: ${romPath}`);
+  if (!fs.existsSync(programPath)) {
+    vscode.window.showErrorMessage(`File not found: ${programPath}`);
     return;
   }
 
@@ -92,7 +92,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   resetHardwareStatsTracking();
   resetMemoryDumpState();
 
-  const emu = new Emulator('', {}, romPath);
+  const emu = new Emulator(context.extensionPath, '', {}, programPath);
 
   let debugStream: fs.WriteStream | null = null;
 
@@ -111,8 +111,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
   // prepare instruction debug log next to the ROM file (now that emuOutput exists)
   try {
-    if (log_tick_to_file && romPath) {
-      const parsed = path.parse(romPath);
+    if (log_tick_to_file && programPath) {
+      const parsed = path.parse(programPath);
       const logName = parsed.name + '.debug.log';
       const logPath = path.join(parsed.dir, logName);
       debugStream = fs.createWriteStream(logPath, { flags: 'w' });
@@ -127,9 +127,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
   // Announce ROM load (path, size, load addr)
   try {
-    const size = fs.statSync(romPath).size;
-    emuOutput.appendLine(`ROM loaded: ${romPath} size=${size} bytes`);
-    try { panel.webview.postMessage({ type: 'romLoaded', path: romPath, size, addr: 0x0100 }); } catch (e) {}
+    const size = fs.statSync(programPath).size;
+    emuOutput.appendLine(`File loaded: ${programPath} size=${size} bytes`);
+    try { panel.webview.postMessage({ type: 'romLoaded', path: programPath, size, addr: 0x0100 }); } catch (e) {}
   } catch (e) {}
 
   // dispose the Output channel when the panel is closed
@@ -172,9 +172,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   emu.hardware?.Request(HardwareReq.DEBUG_ATTACH, { data: true });
   emu.hardware?.Request(HardwareReq.RUN);
 
-  const appliedBreakpoints = loadBreakpointsFromToken(romPath, emu.hardware, emuOutput, options?.debugPath);
+  const appliedBreakpoints = loadBreakpointsFromToken(programPath, emu.hardware, emuOutput, options?.debugPath);
 
-  lastBreakpointSource = { romPath, debugPath: options?.debugPath, hardware: emu.hardware, log: emuOutput };
+  lastBreakpointSource = { programPath: programPath, debugPath: options?.debugPath, hardware: emu.hardware, log: emuOutput };
 
   // attach per-instruction callback to hardware (if available)
   try {
@@ -302,7 +302,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware.Request(HardwareReq.RESET);
         emu.hardware.Request(HardwareReq.RESTART);
-        emu.Load(romPath);
+        emu.Load(programPath);
         emu.hardware.Request(HardwareReq.RUN);
         emitToolbarState(true);
         tick();
@@ -412,7 +412,11 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
 export function reloadEmulatorBreakpointsFromFile(): number {
   if (!lastBreakpointSource) return 0;
-  return loadBreakpointsFromToken(lastBreakpointSource.romPath, lastBreakpointSource.hardware, lastBreakpointSource.log, lastBreakpointSource.debugPath);
+  return loadBreakpointsFromToken(
+    lastBreakpointSource.programPath,
+    lastBreakpointSource.hardware,
+    lastBreakpointSource.log,
+    lastBreakpointSource.debugPath);
 }
 
 
@@ -659,11 +663,15 @@ export function resolveDataDirectiveHover(document: vscode.TextDocument, positio
 }
 
 
-function loadBreakpointsFromToken(romPath: string, hardware: Hardware | undefined | null, log?: vscode.OutputChannel, debugPath?: string): number {
+function loadBreakpointsFromToken(
+    programPath: string,
+    hardware: Hardware | undefined | null,
+    log?: vscode.OutputChannel, debugPath?: string): number
+{
   lastAddressSourceMap = null;
   clearSymbolMetadataCache();
-  if (!hardware || !romPath) return 0;
-  const tokenPath = deriveTokenPath(romPath, debugPath);
+  if (!hardware || !programPath) return 0;
+  const tokenPath = deriveTokenPath(programPath, debugPath);
   if (!tokenPath || !fs.existsSync(tokenPath)) return 0;
 
   let tokens: any;

@@ -549,7 +549,7 @@ export function getWebviewContent() {
         renderHardwareStats(msg);
       } else if (msg.type === 'romLoaded') {
         try {
-          console.log('ROM loaded: ' + (msg.path || '<unknown>') + ' size=' + (msg.size || 0) + ' addr=0x' + (msg.addr !== undefined ? msg.addr.toString(16).padStart(4,'0') : '0100'));
+          console.log('File loaded: ' + (msg.path || '<unknown>') + ' size=' + (msg.size || 0) + ' addr=0x' + (msg.addr !== undefined ? msg.addr.toString(16).padStart(4,'0') : '0100'));
         } catch (e) { }
       }
     });

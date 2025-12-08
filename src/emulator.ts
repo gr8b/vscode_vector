@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { ROM_LOAD_ADDR } from './emulator/memory';
 import Debugger from './emulator/debugger';
 
-export type SettingsType = { [key: string]: any };
+export type EmulatorSettings = { [key: string]: any };
 
 
 export class Emulator {
@@ -21,20 +21,24 @@ export class Emulator {
   // TODO: add ramDiskDataPath to settings
   ramDiskDataPath: string | null = null;
 
-  constructor(settingsPath: string, settings: SettingsType, romFddRecPath: string) {
-    this.Init(romFddRecPath);
+  constructor(extensionPath: string, settingsPath: string, settings: EmulatorSettings, romFddRecPath: string) {
+    this.Init(extensionPath, romFddRecPath);
   }
 
-  Init(romFddRecPath: string) {
-    this.HardwareInit();
+  Init(extensionPath: string, romFddRecPath: string) {
+    const path = pathModule.resolve(romFddRecPath);
+    const ext = pathModule.extname(path).toUpperCase();
+
+    this.HardwareInit(extensionPath, ext === this.EXT_FDD);
     this.Load(romFddRecPath);
   }
 
-  HardwareInit() {
+  HardwareInit(extensionPath: string, bootLoad: boolean) {
     let pathBootData: string = "";
-    if (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length) {
-      pathBootData = vscode.Uri.file(pathModule.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'boot//boot.bin')).fsPath;
+    if (bootLoad) {
+      pathBootData = pathModule.join(extensionPath, 'res', 'boot', 'boot.bin');
     }
+
     // TODO: load these from settings
     this.ramDiskDataPath = null;
     // TODO: load these from settings
@@ -61,23 +65,21 @@ export class Emulator {
     const path = pathModule.resolve(romFddRecPath);
     const ext = pathModule.extname(path).toUpperCase();
 
-    if (ext == this.EXT_ROM)
-    {
-      this.LoadRom(path);
-    }
-    else if (ext == this.EXT_FDD)
-    {
-      // TODO: implement FDD handling
-      // RecentFilesUpdate(FileType::FDD, path, 0, true);
-    }
-    else if (ext == this.EXT_REC)
-    {
-      // TODO: implement REC handling
-      // LoadRecording(path);
-    }
-    else {
-      console.debug("Unsupported file type:", path);
-      return;
+    switch(ext){
+      case this.EXT_ROM:
+        this.LoadRom(path);
+        break;
+      case this.EXT_FDD:
+        // TODO: implement FDD handling
+        // RecentFilesUpdate(FileType::FDD, path, 0, true);
+        break;
+      case this.EXT_REC:
+        // TODO: implement REC handling
+        // LoadRecording(path);
+        break;
+      default:
+        console.debug("Unsupported file type:", path);
+        return;
     }
   }
 

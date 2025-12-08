@@ -102,6 +102,8 @@ export class Memory {
   ramDiskClearAfterRestart: boolean = false;
 
   constructor(pathBootData: string, ramDiskDataPath: string, ramDiskClearAfterRestart: boolean) {
+    // TODO: handle the ramDiskDataPath
+
     if (pathBootData) {
       try {
         // check if file exists

@@ -366,6 +366,7 @@ export function activate(context: vscode.ExtensionContext) {
     mainPath?: string;
     outputBase: string;
     romName: string;
+    fddName?: string;
   };
 
   function findProjectJsonFiles(workspaceRoot: string): string[] {
@@ -403,10 +404,11 @@ export function activate(context: vscode.ExtensionContext) {
       const defaultBase = path.basename(projectPath).replace(/\.project\.json$/i, '') || 'vector_project';
       const outputBase = sanitizeFileName(rawName, sanitizeFileName(defaultBase, 'vector_project'));
       const romName = typeof data?.rom === 'string' && data.rom.trim().length ? data.rom.trim() : `${outputBase}.rom`;
+      const fddName = typeof data?.fdd === 'string' && data.fdd.trim().length ? data.fdd.trim() : undefined;
       const name = rawName;
       const mainEntry = typeof data?.main === 'string' ? data.main : undefined;
       const mainPath = mainEntry ? (path.isAbsolute(mainEntry) ? mainEntry : path.resolve(path.dirname(projectPath), mainEntry)) : undefined;
-      return { projectPath, name, mainPath, outputBase, romName };
+      return { projectPath, name, mainPath, outputBase, romName, fddName };
     } catch (err) {
       if (!opts.quiet) {
         logOutput(`Devector: Failed to read ${projectPath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -490,7 +492,7 @@ export function activate(context: vscode.ExtensionContext) {
     return success;
   }
 
-  async function pickProjectRomPath(options: { compileBeforeRun?: boolean } = {}): Promise<{ project: ProjectInfo; romPath: string; debugPath: string } | undefined> {
+  async function pickProjectRomPath(options: { compileBeforeRun?: boolean } = {}): Promise<{ project: ProjectInfo; programPath: string; debugPath: string } | undefined> {
     if (!vscode.workspace.workspaceFolders || !vscode.workspace.workspaceFolders.length) {
       vscode.window.showErrorMessage('Open a folder before running a ROM.');
       return undefined;
@@ -508,7 +510,7 @@ export function activate(context: vscode.ExtensionContext) {
       const picks = infos.map((info) => ({
         label: info.name,
         description: path.relative(workspaceRoot, info.projectPath) || info.projectPath,
-        detail: info.romName,
+        detail: info.fddName || info.romName,
         target: info
       }));
       const pick = await vscode.window.showQuickPick(picks, { placeHolder: 'Select a project ROM to run' });
@@ -517,38 +519,44 @@ export function activate(context: vscode.ExtensionContext) {
     }
 
     const romPath = path.resolve(path.dirname(selected.projectPath), selected.romName);
+    const fddPath = selected.fddName ? path.resolve(path.dirname(selected.projectPath), selected.fddName) : undefined;
+    const programPath = fddPath || romPath;
     const debugPath = path.join(path.dirname(selected.projectPath), `${selected.outputBase}.debug.json`);
     const ensureRomReady = async (): Promise<boolean> => {
       if (options.compileBeforeRun) {
         const compiled = await compileProjectFile(selected.projectPath, { notify: true, reason: 'compile & run' });
-        return compiled && fs.existsSync(romPath);
+        if (!compiled) return false;
+        // If running FDD, we just check if it exists (we don't compile it directly, but we compiled the ROM)
+        if (fddPath) return fs.existsSync(fddPath);
+        return fs.existsSync(romPath);
       }
-      if (fs.existsSync(romPath)) return true;
+      if (fs.existsSync(programPath)) return true;
       const action = await vscode.window.showWarningMessage(
-        `${path.basename(romPath)} not found. Compile ${selected.name}?`,
+        `${path.basename(programPath)} not found. Compile ${selected.name}?`,
         'Compile',
         'Cancel'
       );
       if (action !== 'Compile') return false;
       const compiled = await compileProjectFile(selected.projectPath, { notify: true, reason: 'run rom' });
-      return compiled && fs.existsSync(romPath);
+      if (!compiled) return false;
+      return fs.existsSync(programPath);
     };
 
     const ready = await ensureRomReady();
     if (!ready) {
-      if (!fs.existsSync(romPath)) {
-        vscode.window.showErrorMessage(`ROM not found: ${romPath}`);
+      if (!fs.existsSync(programPath)) {
+        vscode.window.showErrorMessage(`File not found: ${programPath}`);
       }
       return undefined;
     }
 
-    return { project: selected, romPath, debugPath };
+    return { project: selected, programPath: programPath, debugPath };
   }
 
   async function launchProjectRomEmulator(options: { compileBeforeRun?: boolean } = {}): Promise<boolean> {
-    const romSelection = await pickProjectRomPath({ compileBeforeRun: options.compileBeforeRun });
-    if (!romSelection) return false;
-    await openEmulatorPanel(context, devectorOutput, { romPath: romSelection.romPath, debugPath: romSelection.debugPath });
+    const programSelection = await pickProjectRomPath({ compileBeforeRun: options.compileBeforeRun });
+    if (!programSelection) return false;
+    await openEmulatorPanel(context, devectorOutput, { programPath: programSelection.programPath, debugPath: programSelection.debugPath });
     return true;
   }
 
