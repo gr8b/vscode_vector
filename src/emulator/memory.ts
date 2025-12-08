@@ -271,10 +271,10 @@ export class Memory {
   // Read 4 bytes from every screen buffer.
   // All of these bytes are visually at the same position on the screen
   GetScreenBytes(screenAddrOffset: number): number {
-    const byte8 = this.GetByte(0x8000 + screenAddrOffset);
-    const byteA = this.GetByte(0xA000 + screenAddrOffset);
-    const byteC = this.GetByte(0xC000 + screenAddrOffset);
-    const byteE = this.GetByte(0xE000 + screenAddrOffset);
+    const byte8 = this.ram[0x8000 + screenAddrOffset];
+    const byteA = this.ram[0xA000 + screenAddrOffset];
+    const byteC = this.ram[0xC000 + screenAddrOffset];
+    const byteE = this.ram[0xE000 + screenAddrOffset];
     return (byte8 << 24) | (byteA << 16) | (byteC << 8) | byteE;
   }
 

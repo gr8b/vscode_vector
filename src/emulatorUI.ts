@@ -212,11 +212,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
    *                   to ensure the Register panel is synchronized with the highlighted source line.
    */
   const sendFrameToWebview = (forceStats: boolean = false) => {
-    const out = emu.hardware?.display?.GetFrame() || new Uint32Array(FRAME_LEN);
-    try {
-      panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer });
+    if (emu.hardware?.display){
+      try {
+        const out = emu.hardware.display.GetFrame();
+        panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer });
+      }
+      catch (e) { /* ignore frame conversion errors */ }
     }
-    catch (e) { /* ignore frame conversion errors */ }
     sendHardwareStats(forceStats);
   };
 
