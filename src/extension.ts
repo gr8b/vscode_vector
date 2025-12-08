@@ -371,6 +371,8 @@ export function activate(context: vscode.ExtensionContext) {
     settings?: {
       /** Emulation speed multiplier (e.g., 1, 2, 4) or 'max' for maximum speed */
       speed?: number | 'max';
+      /** View mode for display rendering: 'full' (768×312) or 'noBorder' (256×192 4:3 aspect) */
+      viewMode?: 'full' | 'noBorder';
     };
   };
 
@@ -415,7 +417,7 @@ export function activate(context: vscode.ExtensionContext) {
       const mainPath = mainEntry ? (path.isAbsolute(mainEntry) ? mainEntry : path.resolve(path.dirname(projectPath), mainEntry)) : undefined;
       
       // Parse settings
-      let settings: { speed?: number | 'max' } | undefined = undefined;
+      let settings: { speed?: number | 'max'; viewMode?: 'full' | 'noBorder' } | undefined = undefined;
       if (data?.settings && typeof data.settings === 'object') {
         let speed: number | 'max' | undefined = undefined;
         if (data.settings.speed === 'max') {
@@ -423,8 +425,14 @@ export function activate(context: vscode.ExtensionContext) {
         } else if (typeof data.settings.speed === 'number' && data.settings.speed > 0) {
           speed = data.settings.speed;
         }
-        if (speed !== undefined) {
-          settings = { speed };
+        
+        let viewMode: 'full' | 'noBorder' | undefined = undefined;
+        if (data.settings.viewMode === 'full' || data.settings.viewMode === 'noBorder') {
+          viewMode = data.settings.viewMode;
+        }
+        
+        if (speed !== undefined || viewMode !== undefined) {
+          settings = { speed, viewMode };
         }
       }
       
@@ -580,7 +588,8 @@ export function activate(context: vscode.ExtensionContext) {
       programPath: programSelection.programPath, 
       debugPath: programSelection.debugPath,
       projectPath: programSelection.project.projectPath,
-      initialSpeed: programSelection.project.settings?.speed
+      initialSpeed: programSelection.project.settings?.speed,
+      initialViewMode: programSelection.project.settings?.viewMode
     });
     return true;
   }
