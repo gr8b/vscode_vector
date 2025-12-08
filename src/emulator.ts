@@ -119,10 +119,17 @@ export class Emulator {
 
 	LoadFdd(path: string, driveIdx: number = 0, autoBoot: boolean = true)
   {
-    const buffer = fs.readFileSync(path);
+    // If fddDataPath is set and exists, load from there instead of the original FDD file
+    let loadPath = path;
+    if (this.fddDataPath && fs.existsSync(this.fddDataPath)) {
+      loadPath = this.fddDataPath;
+      console.log(`Loading saved FDD data from ${this.fddDataPath}`);
+    }
+
+    const buffer = fs.readFileSync(loadPath);
     let fddimg = new Uint8Array(buffer);
     if (!fddimg || fddimg.length === 0) {
-      console.log("Error occurred while loading the file. Path: " + path + ". " +
+      console.log("Error occurred while loading the file. Path: " + loadPath + ". " +
         "Please ensure the file exists and you have the correct permissions to read it.");
       return;
     }
@@ -130,7 +137,7 @@ export class Emulator {
     if (fddimg.length > FDD_SIZE) {
       console.log("Fdc1793 Warning: disk image is too big. " +
         `It size will be concatenated to ${FDD_SIZE}. ` +
-        `Original size: ${fddimg.length} bytes, path: ${path}`);
+        `Original size: ${fddimg.length} bytes, path: ${loadPath}`);
       fddimg = fddimg.slice(0, FDD_SIZE);
     }
 

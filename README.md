@@ -126,7 +126,8 @@ You can configure your project using a `.project.json` file. This file defines t
     "rom": "./out/game.rom",
     "fdd": "./out/game.fdd",
     "settings": {
-        "speed": "max"
+        "speed": "max",
+        "fddDataPath": "./out/game_saved.fdd"
     }
 }
 ```
@@ -148,9 +149,10 @@ You can configure your project using a `.project.json` file. This file defines t
 
 - **fddDataPath**: (Optional) Path to save FDD disk data for persistence across emulator restarts.
   - When set, any writes to the FDD (floppy disk) during emulation are automatically saved to this file when the emulator closes.
-  - On the next run, you can load this saved data to preserve changes made to the disk.
+  - On the next run, if this saved file exists, it will be loaded instead of the original FDD file specified in the `fdd` field.
   - Example: `"fddDataPath": "./out/saved_disk.fdd"`
   - If not set, FDD changes are lost on each emulator restart.
+  - This allows you to preserve game saves, high scores, and other data written to the floppy disk.
 
 - **ramDiskDataPath**: (Optional) Path to save RAM disk data for persistence across emulator restarts.
   - When set, RAM disk contents are automatically saved to this file when the emulator closes and loaded on startup.
