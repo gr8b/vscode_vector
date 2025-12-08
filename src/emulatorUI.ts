@@ -17,6 +17,9 @@ import { KbOperation } from './emulator/keyboard';
 // set to true to enable instruction logging to file
 const log_tick_to_file = false;
 
+// Decoration colors
+const UNMAPPED_ADDRESS_COLOR = '#ffcc00';
+
 type SourceLineRef = { file: string; line: number };
 
 let lastBreakpointSource: { programPath: string; debugPath?: string; hardware?: Hardware | null; log?: vscode.OutputChannel } | null = null;
@@ -40,6 +43,9 @@ let pausedLineDecoration: vscode.TextEditorDecorationType | null = null;
 let unmappedAddressDecoration: vscode.TextEditorDecorationType | null = null;
 let lastHighlightedEditor: vscode.TextEditor | null = null;
 let lastHighlightedLine: number | null = null;
+let lastHighlightedFilePath: string | null = null;
+let lastHighlightDecoration: vscode.DecorationOptions | null = null;
+let lastHighlightIsUnmapped: boolean = false;
 let currentToolbarIsRunning = true;
 let currentEmulationSpeed: number | 'max' = 1;
 let dataReadDecoration: vscode.TextEditorDecorationType | null = null;
@@ -381,8 +387,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   }, null, context.subscriptions);
 
   const editorVisibilityDisposable = vscode.window.onDidChangeVisibleTextEditors(() => {
-    if (!currentToolbarIsRunning && lastDataAccessSnapshot) {
-      applyDataLineHighlightsFromSnapshot(lastDataAccessSnapshot);
+    if (!currentToolbarIsRunning) {
+      // Reapply execution highlight when editor visibility changes
+      reapplyExecutionHighlight();
+      // Reapply data line highlights (reads/writes)
+      if (lastDataAccessSnapshot) {
+        applyDataLineHighlightsFromSnapshot(lastDataAccessSnapshot);
+      }
     }
   });
   context.subscriptions.push(editorVisibilityDisposable);
@@ -989,7 +1000,55 @@ function clearHighlightedSourceLine() {
   }
   lastHighlightedEditor = null;
   lastHighlightedLine = null;
+  lastHighlightedFilePath = null;
+  lastHighlightDecoration = null;
+  lastHighlightIsUnmapped = false;
 }
+
+/**
+ * Reapplies the execution highlight to the source editor when it becomes visible again.
+ * This function is called when the visible editors change (e.g., when tabs are moved or split).
+ * It restores the paused line decoration (green highlight) or unmapped address decoration (yellow)
+ * to maintain continuity of the debugger state visualization.
+ * 
+ * The function only operates when:
+ * - The emulator is paused (not running)
+ * - There is a saved highlight state (file path and decoration)
+ * - The highlighted file is among the currently visible editors
+ */
+function reapplyExecutionHighlight() {
+  // Only reapply if we have saved highlight state and emulator is paused
+  if (!lastHighlightedFilePath || !lastHighlightDecoration || currentToolbarIsRunning) {
+    return;
+  }
+
+  // Find the editor for the highlighted file in visible editors
+  const editor = vscode.window.visibleTextEditors.find(
+    (ed: vscode.TextEditor) => ed.document.uri.fsPath === lastHighlightedFilePath
+  );
+
+  if (!editor) {
+    return;
+  }
+
+  // Use the saved flag to determine which decoration type to apply
+  const decorationType = lastHighlightIsUnmapped
+    ? unmappedAddressDecoration
+    : pausedLineDecoration;
+
+  if (!decorationType) {
+    return;
+  }
+
+  try {
+    // Reapply the decoration to the editor
+    editor.setDecorations(decorationType, [lastHighlightDecoration]);
+    lastHighlightedEditor = editor;
+  } catch (e) {
+    /* ignore decoration reapply errors */
+  }
+}
+
 
 function isSkippableHighlightLine(text: string): boolean {
   const trimmed = text.trim();
@@ -1113,7 +1172,7 @@ function highlightSourceAddress(hardware: Hardware | undefined | null, addr?: nu
           renderOptions: {
             after: {
               contentText: `  No source mapping for address ${addrHex}${disasmText}`,
-              color: '#ffcc00',
+              color: UNMAPPED_ADDRESS_COLOR,
               fontStyle: 'italic',
               fontWeight: 'normal'
             }
@@ -1122,6 +1181,9 @@ function highlightSourceAddress(hardware: Hardware | undefined | null, addr?: nu
         editorToUse.setDecorations(unmappedAddressDecoration, [decoration]);
         lastHighlightedEditor = editorToUse;  // Restore the reference
         lastHighlightedLine = idx;  // Restore the line number
+        lastHighlightedFilePath = doc.uri.fsPath;
+        lastHighlightDecoration = decoration;
+        lastHighlightIsUnmapped = true;
       } catch (err) {
         /* ignore unmapped decoration errors */
       }
@@ -1170,6 +1232,9 @@ function highlightSourceAddress(hardware: Hardware | undefined | null, addr?: nu
       editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
       lastHighlightedEditor = editor;
       lastHighlightedLine = idx;
+      lastHighlightedFilePath = targetPath;
+      lastHighlightDecoration = decoration;
+      lastHighlightIsUnmapped = false;
     } catch (err) {
       /* ignore highlight errors */
     }
