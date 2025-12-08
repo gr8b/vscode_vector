@@ -572,6 +572,10 @@ export function getWebviewContent() {
         try {
           console.log('File loaded: ' + (msg.path || '<unknown>') + ' size=' + (msg.size || 0) + ' addr=0x' + (msg.addr !== undefined ? msg.addr.toString(16).padStart(4,'0') : '0100'));
         } catch (e) { }
+      } else if (msg.type === 'setSpeed') {
+        if (speedSelect instanceof HTMLSelectElement && msg.speed !== undefined) {
+          speedSelect.value = String(msg.speed);
+        }
       }
     });
     // keyboard forwarding

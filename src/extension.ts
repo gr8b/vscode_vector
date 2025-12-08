@@ -367,6 +367,11 @@ export function activate(context: vscode.ExtensionContext) {
     outputBase: string;
     romName: string;
     fddName?: string;
+    /** Optional project settings */
+    settings?: {
+      /** Emulation speed multiplier (e.g., 1, 2, 4) or 'max' for maximum speed */
+      speed?: number | 'max';
+    };
   };
 
   function findProjectJsonFiles(workspaceRoot: string): string[] {
@@ -408,7 +413,22 @@ export function activate(context: vscode.ExtensionContext) {
       const name = rawName;
       const mainEntry = typeof data?.main === 'string' ? data.main : undefined;
       const mainPath = mainEntry ? (path.isAbsolute(mainEntry) ? mainEntry : path.resolve(path.dirname(projectPath), mainEntry)) : undefined;
-      return { projectPath, name, mainPath, outputBase, romName, fddName };
+      
+      // Parse settings
+      let settings: { speed?: number | 'max' } | undefined = undefined;
+      if (data?.settings && typeof data.settings === 'object') {
+        let speed: number | 'max' | undefined = undefined;
+        if (data.settings.speed === 'max') {
+          speed = 'max';
+        } else if (typeof data.settings.speed === 'number' && data.settings.speed > 0) {
+          speed = data.settings.speed;
+        }
+        if (speed !== undefined) {
+          settings = { speed };
+        }
+      }
+      
+      return { projectPath, name, mainPath, outputBase, romName, fddName, settings };
     } catch (err) {
       if (!opts.quiet) {
         logOutput(`Devector: Failed to read ${projectPath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -556,7 +576,12 @@ export function activate(context: vscode.ExtensionContext) {
   async function launchProjectRomEmulator(options: { compileBeforeRun?: boolean } = {}): Promise<boolean> {
     const programSelection = await pickProjectRomPath({ compileBeforeRun: options.compileBeforeRun });
     if (!programSelection) return false;
-    await openEmulatorPanel(context, devectorOutput, { programPath: programSelection.programPath, debugPath: programSelection.debugPath });
+    await openEmulatorPanel(context, devectorOutput, { 
+      programPath: programSelection.programPath, 
+      debugPath: programSelection.debugPath,
+      projectPath: programSelection.project.projectPath,
+      initialSpeed: programSelection.project.settings?.speed
+    });
     return true;
   }
 

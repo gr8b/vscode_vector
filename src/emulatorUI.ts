@@ -55,7 +55,16 @@ let lastDataAccessSnapshot: MemoryAccessSnapshot | null = null;
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
 
-type OpenEmulatorOptions = { programPath?: string; debugPath?: string };
+type OpenEmulatorOptions = { 
+  /** Path to the ROM or FDD file to load */
+  programPath?: string; 
+  /** Path to the debug symbols file */
+  debugPath?: string; 
+  /** Path to the project.json file (used for saving emulation speed on close) */
+  projectPath?: string;
+  /** Initial emulation speed to set when starting the emulator */
+  initialSpeed?: number | 'max';
+};
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel, options?: OpenEmulatorOptions)
 {
@@ -139,6 +148,14 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     try { panel.webview.postMessage({ type: 'romLoaded', path: programPath, size, addr: 0x0100 }); } catch (e) {}
   } catch (e) {}
 
+  // Set initial speed from options if provided
+  if (options?.initialSpeed !== undefined) {
+    currentEmulationSpeed = options.initialSpeed;
+    try { 
+      panel.webview.postMessage({ type: 'setSpeed', speed: options.initialSpeed }); 
+    } catch (e) {}
+  }
+
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
     () => {
@@ -160,6 +177,24 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         }
       }
       catch (e) {}
+
+      // Save current emulation speed to project settings if projectPath is available
+      // Note: This is a simple read-modify-write operation without file locking.
+      // In normal usage (single VSCode instance), this is fine. If multiple instances
+      // are saving simultaneously, the last write wins.
+      if (options?.projectPath) {
+        try {
+          const projectText = fs.readFileSync(options.projectPath, 'utf8');
+          const projectData = JSON.parse(projectText);
+          if (!projectData.settings) {
+            projectData.settings = {};
+          }
+          projectData.settings.speed = currentEmulationSpeed;
+          fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
+        } catch (err) {
+          // Silently fail if we can't save the speed (e.g., file permissions, concurrent access)
+        }
+      }
 
       currentPanelController = null;
       lastBreakpointSource = null;
