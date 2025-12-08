@@ -593,11 +593,9 @@ export class Fdc1793 {
             for (let i = 0; i < Fdc1793.DRIVES_MAX; i++) {
                 const disk = this.disks[i];
                 if (disk.mounted && disk.updated) {
-                    // Create parent directory if it doesn't exist
+                    // Create parent directory (mkdirSync with recursive handles existing directories)
                     const parentDir = path.dirname(this.fddDataPath);
-                    if (!fs.existsSync(parentDir)) {
-                        fs.mkdirSync(parentDir, { recursive: true });
-                    }
+                    fs.mkdirSync(parentDir, { recursive: true });
                     // Save the disk data to file
                     fs.writeFileSync(this.fddDataPath, disk.data);
                     console.log(`FDD data saved to ${this.fddDataPath} (drive ${i})`);
