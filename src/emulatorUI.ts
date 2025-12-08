@@ -169,6 +169,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       catch (e) {}
 
       // Save current emulation speed to project settings if projectPath is available
+      // Note: This is a simple read-modify-write operation without file locking.
+      // In normal usage (single VSCode instance), this is fine. If multiple instances
+      // are saving simultaneously, the last write wins.
       if (options?.projectPath) {
         try {
           const projectText = fs.readFileSync(options.projectPath, 'utf8');
@@ -179,7 +182,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
           projectData.settings.speed = currentEmulationSpeed;
           fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
         } catch (err) {
-          // Silently fail if we can't save the speed
+          // Silently fail if we can't save the speed (e.g., file permissions, concurrent access)
         }
       }
 

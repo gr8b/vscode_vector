@@ -411,9 +411,21 @@ export function activate(context: vscode.ExtensionContext) {
       const name = rawName;
       const mainEntry = typeof data?.main === 'string' ? data.main : undefined;
       const mainPath = mainEntry ? (path.isAbsolute(mainEntry) ? mainEntry : path.resolve(path.dirname(projectPath), mainEntry)) : undefined;
-      const settings = data?.settings && typeof data.settings === 'object' ? {
-        speed: data.settings.speed === 'max' ? 'max' : (typeof data.settings.speed === 'number' && data.settings.speed > 0 ? data.settings.speed : undefined)
-      } : undefined;
+      
+      // Parse settings
+      let settings: { speed?: number | 'max' } | undefined = undefined;
+      if (data?.settings && typeof data.settings === 'object') {
+        let speed: number | 'max' | undefined = undefined;
+        if (data.settings.speed === 'max') {
+          speed = 'max';
+        } else if (typeof data.settings.speed === 'number' && data.settings.speed > 0) {
+          speed = data.settings.speed;
+        }
+        if (speed !== undefined) {
+          settings = { speed };
+        }
+      }
+      
       return { projectPath, name, mainPath, outputBase, romName, fddName, settings };
     } catch (err) {
       if (!opts.quiet) {

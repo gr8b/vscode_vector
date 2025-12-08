@@ -575,7 +575,6 @@ export function getWebviewContent() {
       } else if (msg.type === 'setSpeed') {
         if (speedSelect instanceof HTMLSelectElement && msg.speed !== undefined) {
           speedSelect.value = String(msg.speed);
-          vscode.postMessage({ type: 'speedChange', speed: speedSelect.value });
         }
       }
     });
