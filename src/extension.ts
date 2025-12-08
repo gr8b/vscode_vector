@@ -439,7 +439,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (typeof data.settings.ramDiskDataPath === 'string') {
           const trimmed = data.settings.ramDiskDataPath.trim();
           if (trimmed.length > 0) {
-            ramDiskDataPath = trimmed;
+            // Resolve to absolute path relative to project directory
+            ramDiskDataPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(path.dirname(projectPath), trimmed);
           }
         }
         
@@ -447,7 +448,8 @@ export function activate(context: vscode.ExtensionContext) {
         if (typeof data.settings.fddDataPath === 'string') {
           const trimmed = data.settings.fddDataPath.trim();
           if (trimmed.length > 0) {
-            fddDataPath = trimmed;
+            // Resolve to absolute path relative to project directory
+            fddDataPath = path.isAbsolute(trimmed) ? trimmed : path.resolve(path.dirname(projectPath), trimmed);
           }
         }
         
