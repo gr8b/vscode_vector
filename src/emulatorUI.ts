@@ -54,6 +54,9 @@ let lastDataAccessSnapshot: MemoryAccessSnapshot | null = null;
 
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
+// View modes for display rendering
+type ViewMode = 'full' | 'noBorder';
+let currentViewMode: ViewMode = 'noBorder';
 
 type OpenEmulatorOptions = { 
   /** Path to the ROM or FDD file to load */
@@ -64,6 +67,8 @@ type OpenEmulatorOptions = {
   projectPath?: string;
   /** Initial emulation speed to set when starting the emulator */
   initialSpeed?: number | 'max';
+  /** Initial view mode for display rendering */
+  initialViewMode?: ViewMode;
 };
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel, options?: OpenEmulatorOptions)
@@ -156,6 +161,14 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     } catch (e) {}
   }
 
+  // Set initial view mode from options if provided
+  if (options?.initialViewMode !== undefined) {
+    currentViewMode = options.initialViewMode;
+    try {
+      panel.webview.postMessage({ type: 'setViewMode', viewMode: options.initialViewMode });
+    } catch (e) {}
+  }
+
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
     () => {
@@ -178,7 +191,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       }
       catch (e) {}
 
-      // Save current emulation speed to project settings if projectPath is available
+      // Save current emulation speed and view mode to project settings if projectPath is available
       // Note: This is a simple read-modify-write operation without file locking.
       // In normal usage (single VSCode instance), this is fine. If multiple instances
       // are saving simultaneously, the last write wins.
@@ -190,6 +203,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
             projectData.settings = {};
           }
           projectData.settings.speed = currentEmulationSpeed;
+          projectData.settings.viewMode = currentViewMode;
           fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
         } catch (err) {
           // Silently fail if we can't save the speed (e.g., file permissions, concurrent access)
@@ -248,6 +262,40 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   };
 
   /**
+   * Crops the full 768×312 framebuffer to show only the 256×256 active area.
+   * The active area starts at line 40 (SCAN_ACTIVE_AREA_TOP) and is centered horizontally.
+   * For a 4:3 aspect ratio display, we extract 256×192 centered vertically within the active area.
+   */
+  const cropFrameToNoBorder = (fullFrame: Uint32Array): { data: Uint32Array; width: number; height: number } => {
+    const SCAN_ACTIVE_AREA_TOP = 40; // 24 vsync + 16 vblank top
+    const ACTIVE_AREA_H = 256;
+    const BORDER_LEFT = 128; // in 768px buffer for MODE_512
+    
+    // For 4:3 aspect ratio with width 256: height should be 192 (256/4*3 = 192)
+    const OUTPUT_WIDTH = 256;
+    const OUTPUT_HEIGHT = 192;
+    
+    // Center the 192 height within the 256 active area
+    const verticalOffset = Math.floor((ACTIVE_AREA_H - OUTPUT_HEIGHT) / 2);
+    const startLine = SCAN_ACTIVE_AREA_TOP + verticalOffset;
+    
+    const croppedFrame = new Uint32Array(OUTPUT_WIDTH * OUTPUT_HEIGHT);
+    
+    for (let y = 0; y < OUTPUT_HEIGHT; y++) {
+      const srcY = startLine + y;
+      const srcOffset = srcY * FRAME_W + BORDER_LEFT;
+      const dstOffset = y * OUTPUT_WIDTH;
+      
+      // Copy 256 pixels from the center of each line
+      for (let x = 0; x < OUTPUT_WIDTH; x++) {
+        croppedFrame[dstOffset + x] = fullFrame[srcOffset + x * 2]; // *2 because MODE_256 duplicates pixels
+      }
+    }
+    
+    return { data: croppedFrame, width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT };
+  };
+
+  /**
    * Send the current display frame to the webview.
    * @param forceStats If true, bypasses the throttling mechanism to force an immediate
    *                   hardware stats update. Use this after debug actions (pause, step, break)
@@ -256,8 +304,16 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   const sendFrameToWebview = (forceStats: boolean = false) => {
     if (emu.hardware?.display){
       try {
-        const out = emu.hardware.display.GetFrame();
-        panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: out.buffer });
+        const fullFrame = emu.hardware.display.GetFrame();
+        
+        if (currentViewMode === 'noBorder') {
+          // Crop to 256×192 active area with 4:3 aspect ratio
+          const cropped = cropFrameToNoBorder(fullFrame);
+          panel.webview.postMessage({ type: 'frame', width: cropped.width, height: cropped.height, data: cropped.data.buffer });
+        } else {
+          // Send full 768×312 frame
+          panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: fullFrame.buffer });
+        }
       }
       catch (e) { /* ignore frame conversion errors */ }
     }
@@ -408,6 +464,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         if (!isNaN(parsed) && parsed > 0) {
           currentEmulationSpeed = parsed;
         }
+      }
+    } else if (msg && msg.type === 'viewModeChange') {
+      const viewMode = msg.viewMode;
+      if (viewMode === 'full' || viewMode === 'noBorder') {
+        currentViewMode = viewMode;
+        // Re-send current frame with new view mode
+        sendFrameToWebview(false);
       }
     }
   }, undefined, context.subscriptions);

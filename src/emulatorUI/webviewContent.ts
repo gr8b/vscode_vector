@@ -96,6 +96,13 @@ export function getWebviewContent() {
         <option value="max">Max</option>
       </select>
     </label>
+    <label>
+      View:
+      <select id="view-select">
+        <option value="noBorder" selected>No Border</option>
+        <option value="full">Full</option>
+      </select>
+    </label>
   </div>
   <div class="display-row">
     <div class="display-row__canvas">
@@ -180,6 +187,7 @@ export function getWebviewContent() {
     const pauseRunButton = toolbar ? toolbar.querySelector('button[data-action="pause"]') : null;
     const stepButtonActions = ['stepOver','stepInto','stepOut','stepFrame','step256'];
     const speedSelect = document.getElementById('speed-select');
+    const viewSelect = document.getElementById('view-select');
     const memoryDumpContent = document.getElementById('memory-dump');
     const memoryFollowCheckbox = document.getElementById('memory-follow');
     const memoryStartInput = document.getElementById('memory-start');
@@ -500,6 +508,12 @@ export function getWebviewContent() {
       });
     }
 
+    if (viewSelect instanceof HTMLSelectElement) {
+      viewSelect.addEventListener('change', () => {
+        vscode.postMessage({ type: 'viewModeChange', viewMode: viewSelect.value });
+      });
+    }
+
     const shouldForwardKey = (event) => {
       const target = event.target;
       if (!target) return true;
@@ -575,6 +589,10 @@ export function getWebviewContent() {
       } else if (msg.type === 'setSpeed') {
         if (speedSelect instanceof HTMLSelectElement && msg.speed !== undefined) {
           speedSelect.value = String(msg.speed);
+        }
+      } else if (msg.type === 'setViewMode') {
+        if (viewSelect instanceof HTMLSelectElement && msg.viewMode !== undefined) {
+          viewSelect.value = String(msg.viewMode);
         }
       }
     });
