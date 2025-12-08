@@ -434,8 +434,11 @@ export function activate(context: vscode.ExtensionContext) {
         }
         
         let ramDiskDataPath: string | undefined = undefined;
-        if (typeof data.settings.ramDiskDataPath === 'string' && data.settings.ramDiskDataPath.trim().length > 0) {
-          ramDiskDataPath = data.settings.ramDiskDataPath.trim();
+        if (typeof data.settings.ramDiskDataPath === 'string') {
+          const trimmed = data.settings.ramDiskDataPath.trim();
+          if (trimmed.length > 0) {
+            ramDiskDataPath = trimmed;
+          }
         }
         
         if (speed !== undefined || viewMode !== undefined || ramDiskDataPath !== undefined) {

@@ -123,6 +123,7 @@ export class Memory {
     }
 
     // Load RAM disk data if path is provided and file exists
+    // Note: Only load if ramDiskClearAfterRestart is false, otherwise RAM disk should start empty
     if (ramDiskDataPath && !ramDiskClearAfterRestart) {
       try {
         if (fs.existsSync(ramDiskDataPath)) {
