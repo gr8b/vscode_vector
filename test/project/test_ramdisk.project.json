@@ -1,0 +1,10 @@
+{
+    "name": "test_ramdisk",
+    "main": "prg_main.asm",
+    "rom": "./out/test_ramdisk.rom",
+    "settings": {
+        "speed": 1,
+        "viewMode": "noBorder",
+        "ramDiskDataPath": "./out/test_ramdisk.ramdata"
+    }
+}
