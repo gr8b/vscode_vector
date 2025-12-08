@@ -45,6 +45,7 @@ let lastHighlightedEditor: vscode.TextEditor | null = null;
 let lastHighlightedLine: number | null = null;
 let lastHighlightedFilePath: string | null = null;
 let lastHighlightDecoration: vscode.DecorationOptions | null = null;
+let lastHighlightIsUnmapped: boolean = false;
 let currentToolbarIsRunning = true;
 let dataReadDecoration: vscode.TextEditorDecorationType | null = null;
 let dataWriteDecoration: vscode.TextEditorDecorationType | null = null;
@@ -984,6 +985,7 @@ function clearHighlightedSourceLine() {
   lastHighlightedLine = null;
   lastHighlightedFilePath = null;
   lastHighlightDecoration = null;
+  lastHighlightIsUnmapped = false;
 }
 
 function reapplyExecutionHighlight() {
@@ -1001,8 +1003,8 @@ function reapplyExecutionHighlight() {
     return;
   }
 
-  // Determine which decoration type to use based on the saved decoration
-  const decorationType = lastHighlightDecoration.renderOptions?.after?.color === UNMAPPED_ADDRESS_COLOR
+  // Use the saved flag to determine which decoration type to apply
+  const decorationType = lastHighlightIsUnmapped
     ? unmappedAddressDecoration
     : pausedLineDecoration;
 
@@ -1153,6 +1155,7 @@ function highlightSourceAddress(hardware: Hardware | undefined | null, addr?: nu
         lastHighlightedLine = idx;  // Restore the line number
         lastHighlightedFilePath = doc.uri.fsPath;
         lastHighlightDecoration = decoration;
+        lastHighlightIsUnmapped = true;
       } catch (err) {
         /* ignore unmapped decoration errors */
       }
@@ -1203,6 +1206,7 @@ function highlightSourceAddress(hardware: Hardware | undefined | null, addr?: nu
       lastHighlightedLine = idx;
       lastHighlightedFilePath = targetPath;
       lastHighlightDecoration = decoration;
+      lastHighlightIsUnmapped = false;
     } catch (err) {
       /* ignore highlight errors */
     }
