@@ -988,6 +988,17 @@ function clearHighlightedSourceLine() {
   lastHighlightIsUnmapped = false;
 }
 
+/**
+ * Reapplies the execution highlight to the source editor when it becomes visible again.
+ * This function is called when the visible editors change (e.g., when tabs are moved or split).
+ * It restores the paused line decoration (green highlight) or unmapped address decoration (yellow)
+ * to maintain continuity of the debugger state visualization.
+ * 
+ * The function only operates when:
+ * - The emulator is paused (not running)
+ * - There is a saved highlight state (file path and decoration)
+ * - The highlighted file is among the currently visible editors
+ */
 function reapplyExecutionHighlight() {
   // Only reapply if we have saved highlight state and emulator is paused
   if (!lastHighlightedFilePath || !lastHighlightDecoration || currentToolbarIsRunning) {
