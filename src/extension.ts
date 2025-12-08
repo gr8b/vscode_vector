@@ -453,7 +453,30 @@ export function activate(context: vscode.ExtensionContext) {
       return false;
     }
     const projectDir = path.dirname(projectPath);
-    const romPath = path.join(projectDir, info.romName);
+    const romPath = path.resolve(projectDir, info.romName);
+    const romDir = path.dirname(romPath);
+    if (!fs.existsSync(romDir)) {
+      if (options.notify) {
+        const action = await vscode.window.showErrorMessage(
+          `The directory for the output ROM does not exist: ${romDir}. Do you want to create it?`,
+          'Create Directory',
+          'Cancel'
+        );
+        if (action === 'Create Directory') {
+          try {
+            fs.mkdirSync(romDir, { recursive: true });
+          } catch (e) {
+            vscode.window.showErrorMessage(`Failed to create directory: ${e}`);
+            return false;
+          }
+        } else {
+          return false;
+        }
+      } else {
+        logOutput(`Devector: Output directory missing: ${romDir}`);
+        return false;
+      }
+    }
     const debugPath = path.join(projectDir, `${info.outputBase}.debug.json`);
     const success = await compileAsmSource(info.mainPath, contents, { outPath: romPath, debugPath });
     if (success) {
@@ -493,7 +516,7 @@ export function activate(context: vscode.ExtensionContext) {
       selected = pick.target;
     }
 
-    const romPath = path.join(path.dirname(selected.projectPath), selected.romName);
+    const romPath = path.resolve(path.dirname(selected.projectPath), selected.romName);
     const debugPath = path.join(path.dirname(selected.projectPath), `${selected.outputBase}.debug.json`);
     const ensureRomReady = async (): Promise<boolean> => {
       if (options.compileBeforeRun) {
