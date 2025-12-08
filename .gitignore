@@ -23,6 +23,10 @@ logs/
 test.rom
 *.rom
 
+# RAM disk data files
+*.ramdata
+*.ramdisk
+
 # Frames output from run_frames tool
 frames_out/
 
