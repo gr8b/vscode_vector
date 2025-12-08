@@ -367,6 +367,9 @@ export function activate(context: vscode.ExtensionContext) {
     outputBase: string;
     romName: string;
     fddName?: string;
+    settings?: {
+      speed?: number | 'max';
+    };
   };
 
   function findProjectJsonFiles(workspaceRoot: string): string[] {
@@ -408,7 +411,10 @@ export function activate(context: vscode.ExtensionContext) {
       const name = rawName;
       const mainEntry = typeof data?.main === 'string' ? data.main : undefined;
       const mainPath = mainEntry ? (path.isAbsolute(mainEntry) ? mainEntry : path.resolve(path.dirname(projectPath), mainEntry)) : undefined;
-      return { projectPath, name, mainPath, outputBase, romName, fddName };
+      const settings = data?.settings && typeof data.settings === 'object' ? {
+        speed: data.settings.speed === 'max' ? 'max' : (typeof data.settings.speed === 'number' && data.settings.speed > 0 ? data.settings.speed : undefined)
+      } : undefined;
+      return { projectPath, name, mainPath, outputBase, romName, fddName, settings };
     } catch (err) {
       if (!opts.quiet) {
         logOutput(`Devector: Failed to read ${projectPath}: ${err instanceof Error ? err.message : String(err)}`);
@@ -556,7 +562,12 @@ export function activate(context: vscode.ExtensionContext) {
   async function launchProjectRomEmulator(options: { compileBeforeRun?: boolean } = {}): Promise<boolean> {
     const programSelection = await pickProjectRomPath({ compileBeforeRun: options.compileBeforeRun });
     if (!programSelection) return false;
-    await openEmulatorPanel(context, devectorOutput, { programPath: programSelection.programPath, debugPath: programSelection.debugPath });
+    await openEmulatorPanel(context, devectorOutput, { 
+      programPath: programSelection.programPath, 
+      debugPath: programSelection.debugPath,
+      projectPath: programSelection.project.projectPath,
+      initialSpeed: programSelection.project.settings?.speed
+    });
     return true;
   }
 

@@ -49,7 +49,12 @@ let lastDataAccessSnapshot: MemoryAccessSnapshot | null = null;
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
 
-type OpenEmulatorOptions = { programPath?: string; debugPath?: string };
+type OpenEmulatorOptions = { 
+  programPath?: string; 
+  debugPath?: string; 
+  projectPath?: string;
+  initialSpeed?: number | 'max';
+};
 
 export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel, options?: OpenEmulatorOptions)
 {
@@ -133,6 +138,14 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     try { panel.webview.postMessage({ type: 'romLoaded', path: programPath, size, addr: 0x0100 }); } catch (e) {}
   } catch (e) {}
 
+  // Set initial speed from options if provided
+  if (options?.initialSpeed !== undefined) {
+    currentEmulationSpeed = options.initialSpeed;
+    try { 
+      panel.webview.postMessage({ type: 'setSpeed', speed: options.initialSpeed }); 
+    } catch (e) {}
+  }
+
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
     () => {
@@ -154,6 +167,21 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         }
       }
       catch (e) {}
+
+      // Save current emulation speed to project settings if projectPath is available
+      if (options?.projectPath) {
+        try {
+          const projectText = fs.readFileSync(options.projectPath, 'utf8');
+          const projectData = JSON.parse(projectText);
+          if (!projectData.settings) {
+            projectData.settings = {};
+          }
+          projectData.settings.speed = currentEmulationSpeed;
+          fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
+        } catch (err) {
+          // Silently fail if we can't save the speed
+        }
+      }
 
       currentPanelController = null;
       lastBreakpointSource = null;
