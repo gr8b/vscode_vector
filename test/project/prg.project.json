@@ -3,6 +3,7 @@
     "main": "prg_main.asm",
     "rom": "./out/game.rom",
     "settings": {
-        "speed": 1
+        "speed": 1,
+        "viewMode": "full"
     }
 }
