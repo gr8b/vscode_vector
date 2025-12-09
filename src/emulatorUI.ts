@@ -7,7 +7,6 @@ import { HardwareReq } from './emulator/hardware_reqs';
 import { ACTIVE_AREA_H, ACTIVE_AREA_W, BORDER_LEFT, FRAME_H, FRAME_W, SCAN_ACTIVE_AREA_TOP } from './emulator/display';
 import { AddrSpace, MAPPING_MODE_MASK, MemoryAccessSnapshot } from './emulator/memory';
 import CPU from './emulator/cpu_i8080';
-import IO from './emulator/io';
 import { getWebviewContent } from './emulatorUI/webviewContent';
 import { getDebugLine, getDebugState } from './emulatorUI/debugOutput';
 import { handleMemoryDumpControlMessage, resetMemoryDumpState, updateMemoryDumpFromHardware } from './emulatorUI/memoryDump';
