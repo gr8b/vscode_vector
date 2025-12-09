@@ -4,9 +4,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { Hardware } from './emulator/hardware';
 import { HardwareReq } from './emulator/hardware_reqs';
-import { FRAME_H, FRAME_LEN, FRAME_W } from './emulator/display';
-import Memory, { AddrSpace, MAPPING_MODE_MASK, MemoryAccessSnapshot } from './emulator/memory';
-import CPU, { CpuState } from './emulator/cpu_i8080';
+import { ACTIVE_AREA_H, ACTIVE_AREA_W, BORDER_LEFT, FRAME_H, FRAME_W, SCAN_ACTIVE_AREA_TOP } from './emulator/display';
+import { AddrSpace, MAPPING_MODE_MASK, MemoryAccessSnapshot } from './emulator/memory';
+import CPU from './emulator/cpu_i8080';
 import IO from './emulator/io';
 import { getWebviewContent } from './emulatorUI/webviewContent';
 import { getDebugLine, getDebugState } from './emulatorUI/debugOutput';
@@ -268,50 +268,6 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     }
   };
 
-  /**
-   * Crops the full 768×312 framebuffer to show only the active area with 4:3 aspect ratio.
-   * The active area is 256 lines tall starting at line 40 (SCAN_ACTIVE_AREA_TOP).
-   * For a 4:3 aspect ratio with width 256, height should be 192 (256 / 4 * 3 = 192).
-   * The output is cropped to 256×192 and centered within the active area.
-   * 
-   * @param fullFrame The full 768×312 framebuffer
-   * @param displayMode The current display mode (MODE_256 or MODE_512)
-   */
-  const cropFrameToNoBorder = (fullFrame: Uint32Array, displayMode: boolean): { data: Uint32Array; width: number; height: number } => {
-    const SCAN_ACTIVE_AREA_TOP = 40; // 24 vsync + 16 vblank top (from display.ts)
-    const ACTIVE_AREA_H = 256; // (from display.ts)
-    const BORDER_LEFT = 128; // in 768px buffer (from display.ts)
-    
-    // For 4:3 aspect ratio with width 256: height = 256 * 3 / 4 = 192
-    const OUTPUT_WIDTH = 256;
-    const OUTPUT_HEIGHT = Math.floor(OUTPUT_WIDTH * 3 / 4); // 192 for 4:3 aspect ratio
-    
-    // Center vertically within the 256-line active area: (256 - 192) / 2 = 32
-    const verticalOffset = Math.floor((ACTIVE_AREA_H - OUTPUT_HEIGHT) / 2);
-    const startLine = SCAN_ACTIVE_AREA_TOP + verticalOffset;
-    
-    const croppedFrame = new Uint32Array(OUTPUT_WIDTH * OUTPUT_HEIGHT);
-    
-    // Pixel stepping depends on display mode:
-    // MODE_256 (false): Pixels are doubled in buffer → step 2 to get unique pixels
-    // MODE_512 (true): Pixels are not doubled → step 1 for consecutive pixels
-    // Test: displayMode=false → (false === false) ? 2 : 1 → 2 ✓
-    //       displayMode=true  → (true === false) ? 2 : 1 → 1 ✓
-    const pixelStep = (displayMode === IO.MODE_256) ? 2 : 1;
-    
-    for (let y = 0; y < OUTPUT_HEIGHT; y++) {
-      const srcY = startLine + y;
-      const srcOffset = srcY * FRAME_W + BORDER_LEFT;
-      const dstOffset = y * OUTPUT_WIDTH;
-      
-      // Copy pixels with appropriate stepping based on display mode
-      for (let x = 0; x < OUTPUT_WIDTH; x++) {
-        croppedFrame[dstOffset + x] = fullFrame[srcOffset + x * pixelStep];
-      }
-    }
-    
-    return { data: croppedFrame, width: OUTPUT_WIDTH, height: OUTPUT_HEIGHT };
-  };
 
   /**
    * Send the current display frame to the webview.
@@ -323,17 +279,18 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     if (emu.hardware?.display){
       try {
         const fullFrame = emu.hardware.display.GetFrame();
-        
+        let crop: {x: number, y: number, w: number, h: number} = { x: 0, y: 0, w: FRAME_W, h: FRAME_H };
+        let aspect = FRAME_W / FRAME_H;
         if (currentViewMode === 'noBorder') {
-          // Get current display mode to handle pixel doubling correctly
-          const displayMode = emu.hardware.display.io?.GetDisplayMode() ?? IO.MODE_256;
-          // Crop to 256×192 active area with 4:3 aspect ratio
-          const cropped = cropFrameToNoBorder(fullFrame, displayMode);
-          panel.webview.postMessage({ type: 'frame', width: cropped.width, height: cropped.height, data: cropped.data.buffer });
-        } else {
-          // Send full 768×312 frame
-          panel.webview.postMessage({ type: 'frame', width: FRAME_W, height: FRAME_H, data: fullFrame.buffer });
+          crop = { x: BORDER_LEFT, y: SCAN_ACTIVE_AREA_TOP, w: ACTIVE_AREA_W, h: ACTIVE_AREA_H };
+          aspect = 4/3;
         }
+        panel.webview.postMessage(
+          { type: 'frame',
+            width: FRAME_W, height: FRAME_H,
+            crop: crop,
+            aspect: aspect,
+            data: fullFrame.buffer });
       }
       catch (e) { /* ignore frame conversion errors */ }
     }

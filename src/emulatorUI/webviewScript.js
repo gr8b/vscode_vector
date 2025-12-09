@@ -355,26 +355,27 @@
 
     window.addEventListener('message', event => {
       const msg = event.data;
-      if (msg.type === 'frame') {
-          const w = msg.width, h = msg.height;
-          // msg.data is an ArrayBuffer containing native RGBA bytes (R,G,B,A per pixel)
-          try {
-            const buf = new Uint8ClampedArray(msg.data);
-            const img = new ImageData(buf, w, h);
-            // scale canvas to fit container
-            canvas.width = w; canvas.height = h;
-            ctx.putImageData(img, 0, 0);
-          } catch (e) {
-            // If that fails, try interpreting data as a 32-bit view and fall back
-            try {
-              const src32 = new Uint32Array(msg.data);
-              const buf = new Uint8ClampedArray(src32.buffer);
-              const img = new ImageData(buf, w, h);
-              canvas.width = w; canvas.height = h;
-              ctx.putImageData(img, 0, 0);
-            } catch (ee) { /* ignore */ }
-          }
-        } else if (msg.type === 'instr') {
+      switch (msg.type) {
+      case 'frame':
+        const w = msg.width, h = msg.height;
+        const crop = msg.crop;
+        // msg.data is an ArrayBuffer containing native RGBA bytes (R,G,B,A per pixel)
+        try {
+          const buf = new Uint8ClampedArray(msg.data);
+          const img = new ImageData(buf, w, h);
+
+          // Create an offscreen canvas to hold the original image
+          const offscreen = document.createElement('canvas');
+          offscreen.width = crop.w;
+          offscreen.height = crop.h;
+          offscreen.getContext('2d').putImageData(img, -crop.x, -crop.y);
+
+          // Draw the offscreen canvas scaled to the visible canvas
+          canvas.width = crop.w; canvas.height = crop.w / msg.aspect;
+          ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+        } catch (e) { /* ignore frame rendering errors */ }
+        break;
+      case 'instr':
         try {
           const a = msg.addr.toString(16).padStart(4,'0');
           const o = (msg.opcode & 0xff).toString(16).padStart(2,'0');
@@ -384,7 +385,8 @@
           const pcHex = (msg.pc !== undefined) ? (msg.pc & 0xffff).toString(16).padStart(4,'0') : ((msg.regs && msg.regs.PC) ? (msg.regs.PC & 0xffff).toString(16).padStart(4,'0') : '????');
           console.log('CPU ' + a + ': ' + o + ' PC=' + pcHex + ' M=' + mHex + ' ' + flagsStr, msg.regs);
         } catch (e) { /* ignore malformed messages */ }
-      } else if (msg.type === 'pause') {
+        break;
+      case 'pause':
         try {
           const a = msg.addr.toString(16).padStart(4,'0');
           const o = (msg.opcode & 0xff).toString(16).padStart(2,'0');
@@ -394,24 +396,34 @@
           const pcHex = (msg.pc !== undefined) ? (msg.pc & 0xffff).toString(16).padStart(4,'0') : ((msg.regs && msg.regs.PC) ? (msg.regs.PC & 0xffff).toString(16).padStart(4,'0') : '????');
           console.log('--- PAUSED --- CPU ' + a + ': ' + o + ' PC=' + pcHex + ' M=' + mHex + ' ' + flagsStr, msg.regs);
         } catch (e) { /* ignore malformed messages */ }
-      } else if (msg.type === 'toolbarState') {
+        break;
+      case 'toolbarState':
         setRunButtonState(!!msg.isRunning);
-      } else if (msg.type === 'memoryDump') {
+        break;
+      case 'memoryDump':
         updateMemoryDumpState(msg);
-      } else if (msg.type === 'hardwareStats') {
+        break;
+      case 'hardwareStats':
         renderHardwareStats(msg);
-      } else if (msg.type === 'romLoaded') {
+        break;
+      case 'romLoaded':
         try {
           console.log('File loaded: ' + (msg.path || '<unknown>') + ' size=' + (msg.size || 0) + ' addr=0x' + (msg.addr !== undefined ? msg.addr.toString(16).padStart(4,'0') : '0100'));
         } catch (e) { }
-      } else if (msg.type === 'setSpeed') {
+        break;
+      case 'setSpeed':
         if (speedSelect instanceof HTMLSelectElement && msg.speed !== undefined) {
           speedSelect.value = String(msg.speed);
         }
-      } else if (msg.type === 'setViewMode') {
+        break;
+      case 'setViewMode':
         if (viewSelect instanceof HTMLSelectElement && msg.viewMode !== undefined) {
           viewSelect.value = String(msg.viewMode);
         }
+        break;
+      default:
+        // Unknown message type
+        break;
       }
     });
     // keyboard forwarding
