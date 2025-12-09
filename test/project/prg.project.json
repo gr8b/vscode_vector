@@ -2,8 +2,10 @@
     "name": "prg",
     "main": "prg_main.asm",
     "rom": "./out/game.rom",
+    "fdd": "./out/GJ.fdd",
     "settings": {
-        "speed": 1,
-        "viewMode": "full"
+        "speed": "max",
+        "viewMode": "noBorder",
+        "ramDiskDataPath": "prg.ramdisk.bin"
     }
 }

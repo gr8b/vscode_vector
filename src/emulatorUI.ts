@@ -174,6 +174,11 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     } catch (e) {}
   }
 
+  // Set initial RAM disk persistence state
+  try {
+    panel.webview.postMessage({ type: 'setRamDiskPersistence', value: !emu.ramDiskClearAfterRestart });
+  } catch (e) {}
+
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
     () => {
@@ -447,6 +452,55 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         currentViewMode = viewMode;
         // Re-send current frame with new view mode
         sendFrameToWebview(false);
+      }
+    } else if (msg && msg.type === 'toggleRamDiskPersistence') {
+      const enable = !!msg.value;
+      if (enable) {
+        // If enabling, check if we have a path. If not, ask for one.
+        if (!emu.ramDiskDataPath) {
+          vscode.window.showSaveDialog({
+            filters: { 'RAM Disk Image': ['bin', 'dat'] },
+            title: 'Select RAM Disk Persistence File'
+          }).then(saveUri => {
+            if (saveUri) {
+              emu.ramDiskDataPath = saveUri.fsPath;
+              emu.ramDiskClearAfterRestart = false;
+              // Update hardware with new settings
+              if (emu.hardware) {
+                emu.hardware.setRamDiskPersistence(emu.ramDiskDataPath, false);
+              }
+              // Save to project settings if available
+              if (options?.projectPath) {
+                try {
+                  const projectText = fs.readFileSync(options.projectPath, 'utf8');
+                  const projectData = JSON.parse(projectText);
+                  if (!projectData.settings) projectData.settings = {};
+                  projectData.settings.ramDiskDataPath = emu.ramDiskDataPath;
+                  fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
+                } catch (e) {}
+              }
+              // Confirm state back to UI
+              panel.webview.postMessage({ type: 'setRamDiskPersistence', value: true });
+            } else {
+              // User cancelled, revert checkbox
+              panel.webview.postMessage({ type: 'setRamDiskPersistence', value: false });
+            }
+          });
+        } else {
+          // Path exists, just enable persistence
+          emu.ramDiskClearAfterRestart = false;
+          if (emu.hardware) {
+            emu.hardware.setRamDiskPersistence(emu.ramDiskDataPath, false);
+          }
+          panel.webview.postMessage({ type: 'setRamDiskPersistence', value: true });
+        }
+      } else {
+        // Disabling persistence
+        emu.ramDiskClearAfterRestart = true;
+        if (emu.hardware) {
+          emu.hardware.setRamDiskPersistence(emu.ramDiskDataPath || '', true);
+        }
+        panel.webview.postMessage({ type: 'setRamDiskPersistence', value: false });
       }
     }
   }, undefined, context.subscriptions);

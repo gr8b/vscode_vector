@@ -102,6 +102,10 @@ export function getWebviewContent() {
       </select>
     </label>
     <label>
+      Persist RAM Disk
+      <input type="checkbox" id="ram-disk-persist" />
+    </label>
+    <label>
       View:
       <select id="view-select">
         <option value="noBorder" selected>No Border</option>

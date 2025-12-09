@@ -90,6 +90,10 @@ export class Hardware
     this.ReqHandling(HardwareReq.EXIT);
   }
 
+  setRamDiskPersistence(path: string, clearAfterRestart: boolean) {
+    this._memory?.setRamDiskPersistence(path, clearAfterRestart);
+  }
+
   // when HW needs Reset
   Init()
   {

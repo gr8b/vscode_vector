@@ -212,6 +212,11 @@ export class Memory {
 	this.InitRamDiskMapping();
   }
 
+  setRamDiskPersistence(path: string, clearAfterRestart: boolean) {
+    this.ramDiskDataPath = path;
+    this.ramDiskClearAfterRestart = clearAfterRestart;
+  }
+
   SaveRamDiskData(): void {
     if (!this.ramDiskDataPath || this.ramDiskClearAfterRestart) {
       return;
@@ -222,7 +227,7 @@ export class Memory {
       const ramDiskStart = MEMORY_MAIN_LEN;
       const ramDiskLength = MEMORY_RAMDISK_LEN * RAM_DISK_MAX;
       const ramDiskData = this.ram.slice(ramDiskStart, ramDiskStart + ramDiskLength);
-      
+
       // Save to file
       fs.writeFileSync(this.ramDiskDataPath, ramDiskData);
     } catch (err) {
