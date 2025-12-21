@@ -5,24 +5,29 @@ import * as fs from 'fs';
 import { Hardware } from './emulator/hardware';
 import { HardwareReq } from './emulator/hardware_reqs';
 import { ACTIVE_AREA_H, ACTIVE_AREA_W, BORDER_LEFT, FRAME_H, FRAME_W, SCAN_ACTIVE_AREA_TOP } from './emulator/display';
-import { AddrSpace, MAPPING_MODE_MASK, MemoryAccessSnapshot } from './emulator/memory';
-import CPU from './emulator/cpu_i8080';
 import { getWebviewContent } from './emulatorUI/webviewContent';
-import { getDebugLine, getDebugState } from './emulatorUI/debugOutput';
+import { getDebugLine } from './emulatorUI/debugOutput';
 import { handleMemoryDumpControlMessage, resetMemoryDumpState, updateMemoryDumpFromHardware } from './emulatorUI/memoryDump';
 import { disposeHardwareStatsTracking, resetHardwareStatsTracking, tryCollectHardwareStats } from './emulatorUI/hardwareStats';
 import { parseAddressLike } from './emulatorUI/utils';
-import { KbOperation } from './emulator/keyboard';
+import { MemoryAccessLog } from './emulator/debugger';
+import { ProjectInfo1 } from './extention/project_info';
+import { DEBUG_FILE_SUFFIX } from './extention/consts';
+import * as ext_consts from './extention/consts';
+import * as consts from './emulatorUI/consts';
 
 // set to true to enable instruction logging to file
 const log_tick_to_file = false;
 
-// Decoration colors
-const UNMAPPED_ADDRESS_COLOR = '#ffcc00';
 
 type SourceLineRef = { file: string; line: number };
 
-let lastBreakpointSource: { programPath: string; debugPath?: string; hardware?: Hardware | null; log?: vscode.OutputChannel } | null = null;
+let lastBreakpointSource: {
+  absoluteRomPath: string;
+  absoluteDebugPath?: string;
+  hardware?: Hardware | null;
+  log?: vscode.OutputChannel } | null = null;
+
 let lastAddressSourceMap: Map<number, SourceLineRef> | null = null;
 type SymbolMeta = { value: number; kind: 'label' | 'const' };
 type SymbolCache = {
@@ -31,6 +36,7 @@ type SymbolCache = {
   lineAddresses: Map<string, Map<number, number>>;
   filePaths: Map<string, string>;
 };
+
 type DataLineSpan = { start: number; byteLength: number; unitBytes: number };
 type DataLineCache = Map<string, Map<number, DataLineSpan>>;
 type DataAddressEntry = { fileKey: string; line: number; span: DataLineSpan };
@@ -47,10 +53,9 @@ let lastHighlightedFilePath: string | null = null;
 let lastHighlightDecoration: vscode.DecorationOptions | null = null;
 let lastHighlightIsUnmapped: boolean = false;
 let currentToolbarIsRunning = true;
-let currentEmulationSpeed: number | 'max' = 1;
 let dataReadDecoration: vscode.TextEditorDecorationType | null = null;
 let dataWriteDecoration: vscode.TextEditorDecorationType | null = null;
-let lastDataAccessSnapshot: MemoryAccessSnapshot | null = null;
+let lastDataAccessLog: MemoryAccessLog | null = null;
 
 let currentPanelController: { pause: () => void; resume: () => void; stepFrame: () => void; } | null = null;
 
@@ -58,49 +63,32 @@ let currentPanelController: { pause: () => void; resume: () => void; stepFrame: 
 type ViewMode = 'full' | 'noBorder';
 let currentViewMode: ViewMode = 'noBorder';
 
-type OpenEmulatorOptions = {
-  /** Path to the ROM or FDD file to load */
-  programPath?: string;
-  /** Path to the debug symbols file */
-  debugPath?: string;
-  /** Path to the project.json file (used for saving emulation speed on close) */
-  projectPath?: string;
-  /** Initial emulation speed to set when starting the emulator */
-  initialSpeed?: number | 'max';
-  /** Initial view mode for display rendering */
-  initialViewMode?: ViewMode;
-  /** Path to the RAM disk data file for persistence */
-  ramDiskDataPath?: string;
-  /** Path to the FDD data file for persistence */
-  fddDataPath?: string;
-};
-
-export async function openEmulatorPanel(context: vscode.ExtensionContext, logChannel?: vscode.OutputChannel, options?: OpenEmulatorOptions)
+export async function openEmulatorPanel(
+  context: vscode.ExtensionContext,
+  logChannel?: vscode.OutputChannel,
+  project?: ProjectInfo1)
 {
-  const pickProgramFromDialog = async (): Promise<string> => {
-    const defaultUri = vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length
-      ? vscode.Uri.file(path.join(vscode.workspace.workspaceFolders[0].uri.fsPath, 'test.rom'))
-      : undefined;
-    const candidates = await vscode.window.showOpenDialog({
+  if (!project) {
+    // No project provided, open a file picker for ROM/FDD files
+    const uris = await vscode.window.showOpenDialog({
       canSelectMany: false,
-      defaultUri,
-      filters: { 'File': ['rom', 'fdd'] }
+      filters: { 'ROM Files': ['rom', 'fdd'], 'All Files': ['*'] },
+      openLabel: 'Open ROM in Devector Emulator'
     });
-    return candidates && candidates.length ? candidates[0].fsPath : '';
-  };
+    if (!uris || uris.length === 0) {
+      return;
+    }
+    const romUri = uris[0];
 
-  let programPath = (options?.programPath|| '').trim();
-  if (!programPath) {
-    programPath = await pickProgramFromDialog();
+    project = new ProjectInfo1({
+      name: path.basename(romUri.fsPath, path.extname(romUri.fsPath)),
+      romPath: romUri.fsPath
+    });
   }
 
-  if (!programPath) {
-    vscode.window.showWarningMessage('File selection cancelled. Emulator not started.');
-    return;
-  }
 
-  if (!fs.existsSync(programPath)) {
-    vscode.window.showErrorMessage(`File not found: ${programPath}`);
+  if (!fs.existsSync(project.absolute_rom_path!)) {
+    vscode.window.showErrorMessage(`File not found: ${project.absolute_rom_path!}`);
     return;
   }
 
@@ -117,78 +105,106 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   resetHardwareStatsTracking();
   resetMemoryDumpState();
 
-  const emu = new Emulator(context.extensionPath, '', {
-    ramDiskDataPath: options?.ramDiskDataPath,
-    ramDiskClearAfterRestart: !options?.ramDiskDataPath,  // Only clear if no persistence path
-    fddDataPath: options?.fddDataPath
-  }, programPath);
-
-  let debugStream: fs.WriteStream | null = null;
-
 
   // Create an output channel for per-instruction logs and attach a hook
   const ownsOutputChannel = !logChannel;
-  const emuOutput = logChannel ?? vscode.window.createOutputChannel('Devector');
+  const devectorOutput = logChannel ?? vscode.window.createOutputChannel('Devector');
   if (ownsOutputChannel) {
-    context.subscriptions.push(emuOutput);
+    context.subscriptions.push(devectorOutput);
   }
   // Bring the output channel forward so users see logs by default
   try {
-    emuOutput.show(true);
-    emuOutput.appendLine('Devector logging enabled');
+    devectorOutput.show(true);
+    devectorOutput.appendLine('Devector logging enabled');
   } catch (e) {}
+
+  const emu = new Emulator(context.extensionPath, project);
+  const emuResult = emu.result;
+  if (!emuResult.success){
+    devectorOutput.appendLine('Devector Errors: ' + emuResult.errors?.join("\n") || "Unknown error");
+    return;
+  }
+  if (emuResult.warnings?.length) {
+    devectorOutput.appendLine('Devector Warnings: ' + emuResult.warnings.join("\n"));
+  }
+
+  if (emuResult.printMessages?.length) {
+    devectorOutput.appendLine('Devector: ' + emuResult.printMessages.join("\n"));
+  }
+
+
+  let debugStream: fs.WriteStream | null = null;
 
   // prepare instruction debug log next to the ROM file (now that emuOutput exists)
   try {
-    if (log_tick_to_file && programPath) {
-      const parsed = path.parse(programPath);
-      const logName = parsed.name + '.debug.log';
+    if (log_tick_to_file) {
+      const parsed = path.parse(project.absolute_rom_path!);
+      const logName = parsed.name + ext_consts.DEBUG_LOG_SUFFIX;
       const logPath = path.join(parsed.dir, logName);
+
       debugStream = fs.createWriteStream(logPath, { flags: 'w' });
       debugStream.on('error', (err) => {
-        try { emuOutput.appendLine(`Debug log error: ${err}`); } catch (e) {}
+        try { devectorOutput.appendLine(`Debug log error: ${err}`); } catch (e) {}
       });
       debugStream.on('open', () => {
-        try { emuOutput.appendLine(`Debug log file created: ${logPath}`); } catch (e) {}
+        try { devectorOutput.appendLine(`Debug log file created: ${logPath}`); } catch (e) {}
       });
     }
   } catch (e) { debugStream = null; }
 
   // Announce ROM load (path, size, load addr)
   try {
-    const size = fs.statSync(programPath).size;
-    emuOutput.appendLine(`File loaded: ${programPath} size=${size} bytes`);
-    try { panel.webview.postMessage({ type: 'romLoaded', path: programPath, size, addr: 0x0100 }); } catch (e) {}
+    const size = fs.statSync(project.absolute_rom_path!).size;
+    devectorOutput.appendLine(`File loaded: ${project.absolute_rom_path!} size=${size} bytes`);
+    try { panel.webview.postMessage({ type: 'romLoaded', path: project.absolute_rom_path!, size, addr: 0x0100 }); } catch (e) {}
   } catch (e) {}
 
-  // Set initial speed from options if provided
-  if (options?.initialSpeed !== undefined) {
-    currentEmulationSpeed = options.initialSpeed;
-    try {
-      panel.webview.postMessage({ type: 'setSpeed', speed: options.initialSpeed });
-    } catch (e) {}
-  }
 
-  // Set initial view mode from options if provided
-  if (options?.initialViewMode !== undefined) {
-    currentViewMode = options.initialViewMode;
-    try {
-      panel.webview.postMessage({ type: 'setViewMode', viewMode: options.initialViewMode });
-    } catch (e) {}
-  }
-
-  // Set initial RAM disk persistence state
   try {
-    panel.webview.postMessage({ type: 'setRamDiskPersistence', value: !emu.ramDiskClearAfterRestart });
+    panel.webview.postMessage({ type: 'setSpeed', speed: project.settings.speed });
   } catch (e) {}
+  try {
+    panel.webview.postMessage({ type: 'setViewMode', viewMode: project.settings.viewMode });
+  } catch (e) {}
+  try {
+    panel.webview.postMessage({ type: 'setRamDiskClearAfterStart', value: project.settings.ramDiskClearAfterRestart });
+  } catch (e) {}
+
+
 
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
-    () => {
+    async () => {
       if (emu.hardware) {
-        try { (emu.hardware as any).debugInstructionCallback = null; } catch (e) {}
-        try { emu.hardware.Request(HardwareReq.STOP); } catch (e) {}
-        try { emu.hardware.Destructor(); } catch (e) {}
+        // Save the RAM Disk
+        if (project && project.settings && !project.settings.ramDiskClearAfterRestart)
+        {
+          // Ensure the RAM Disk path is initialized
+          if (!project.absolute_ram_disk_path) project.init_ram_disk_path();
+          if (!fs.existsSync(project.absolute_ram_disk_path!))
+          {
+            const action = await vscode.window.showWarningMessage(
+              `RAM Disk file not found. Create a new RAM Disk file for project '${project.name}'?`,
+              'Create',
+              'Cancel'
+            );
+            if (action === 'Create')
+            {
+              const saveUri = await vscode.window.showSaveDialog({
+                filters: { 'RAM Disk Image': ['bin', 'dat'] },
+                title: 'Select RAM Disk File',
+                defaultUri: vscode.Uri.file(project.absolute_ram_disk_path!)
+              });
+              if (saveUri) {
+                  project!.settings.ramDiskPath = path.relative(project!.projectDir!, saveUri.fsPath);
+                  project!.save();
+              }
+            }
+          }
+          // Save the RAM Disk to file
+          emu.SaveRamDisk();
+        }
+        try { emu.Destructor(); } catch (e) {}
       }
 
       try {
@@ -200,36 +216,20 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
       try {
         if (ownsOutputChannel) {
-          emuOutput.dispose();
+          devectorOutput.dispose();
         }
       }
       catch (e) {}
 
-      // Save current emulation speed and view mode to project settings if projectPath is available
-      // Note: This is a simple read-modify-write operation without file locking.
-      // In normal usage (single VSCode instance), this is fine. If multiple instances
-      // are saving simultaneously, the last write wins.
-      if (options?.projectPath) {
-        try {
-          const projectText = fs.readFileSync(options.projectPath, 'utf8');
-          const projectData = JSON.parse(projectText);
-          if (!projectData.settings) {
-            projectData.settings = {};
-          }
-          projectData.settings.speed = currentEmulationSpeed;
-          projectData.settings.viewMode = currentViewMode;
-          fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
-        } catch (err) {
-          // Silently fail if we can't save the speed (e.g., file permissions, concurrent access)
-        }
-      }
+      project!.save();
+
 
       currentPanelController = null;
       lastBreakpointSource = null;
       clearHighlightedSourceLine();
       lastAddressSourceMap = null;
       clearDataLineHighlights();
-      lastDataAccessSnapshot = null;
+      lastDataAccessLog = null;
       clearSymbolMetadataCache();
       highlightContext = null;
       resetMemoryDumpState();
@@ -242,27 +242,35 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   emu.hardware?.Request(HardwareReq.DEBUG_ATTACH, { data: true });
   emu.hardware?.Request(HardwareReq.RUN);
 
-  const appliedBreakpoints = loadBreakpointsFromToken(programPath, emu.hardware, emuOutput, options?.debugPath);
+  // TODO: check if appliedBreakpoints was useful
+  const appliedBreakpoints = loadBreakpointsFromToken(
+    project.absolute_rom_path!, emu.hardware, devectorOutput, project.absolute_debug_path!);
 
-  lastBreakpointSource = { programPath: programPath, debugPath: options?.debugPath, hardware: emu.hardware, log: emuOutput };
+  lastBreakpointSource = {
+    absoluteRomPath: project.absolute_rom_path!,
 
+    absoluteDebugPath: project.absolute_debug_path!,
+    hardware: emu.hardware,
+    log: devectorOutput };
+
+  // TODO: implement if still needed. it was for printing per instruction log
   // attach per-instruction callback to hardware (if available)
-  try {
-    if (log_tick_to_file && emu.hardware) {
-      emu.hardware.debugInstructionCallback = (hw) => {
-        try {
-          const line = getDebugLine(hw)
-          if (debugStream && line) {
-            debugStream.write(line + '\n', (err) => {
-              if (err) {
-                 try { emuOutput.appendLine(`Log write error: ${err}`); } catch (e) {}
-              }
-            });
-          }
-        } catch (e) { }
-      };
-    }
-  } catch (e) { }
+  // try {
+  //   if (log_tick_to_file && emu.hardware) {
+  //     emu.hardware.debugInstructionCallback = (hw) => {
+  //       try {
+  //         const line = getDebugLine(hw)
+  //         if (debugStream && line) {
+  //           debugStream.write(line + '\n', (err) => {
+  //             if (err) {
+  //                try { devectorOutput.appendLine(`Log write error: ${err}`); } catch (e) {}
+  //             }
+  //           });
+  //         }
+  //       } catch (e) { }
+  //     };
+  //   }
+  // } catch (e) { }
 
   const sendHardwareStats = (force: boolean = false) => {
     const snapshot = tryCollectHardwareStats(emu.hardware, force);
@@ -283,9 +291,12 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
    *                   to ensure the Register panel is synchronized with the highlighted source line.
    */
   const sendFrameToWebview = (forceStats: boolean = false) => {
-    if (emu.hardware?.display){
+    if (emu.hardware){
       try {
-        const fullFrame = emu.hardware.display.GetFrame();
+        // TODO: implement vsync handling if needed
+        const sync = false;
+        const fullFrame = emu.hardware.Request(HardwareReq.GET_FRAME, {"vsync": sync})["data"];
+
         let crop: {x: number, y: number, w: number, h: number} = { x: 0, y: 0, w: FRAME_W, h: FRAME_H };
         let aspect = FRAME_W / FRAME_H;
         if (currentViewMode === 'noBorder') {
@@ -316,9 +327,9 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     if (isRunning) {
       clearHighlightedSourceLine();
       clearDataLineHighlights();
-      lastDataAccessSnapshot = null;
+      lastDataAccessLog = null;
       try {
-        emu.hardware?.memory?.clearAccessLog();
+        emu.hardware?.Request(HardwareReq.DEBUG_MEM_ACCESS_LOG_RESET);
       } catch (err) {
         /* ignore */
       }
@@ -337,7 +348,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       case 'pause':
         emu.hardware.Request(HardwareReq.STOP);
         sendFrameToWebview(true);
-        printDebugState('Pause:', emu.hardware, emuOutput, panel);
+        printDebugState('Pause:', emu.hardware, devectorOutput, panel);
         emitToolbarState(false);
         break;
       case 'run':
@@ -349,27 +360,27 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
         sendFrameToWebview(true);
-        printDebugState('Step into:', emu.hardware, emuOutput, panel);
+        printDebugState('Step into:', emu.hardware, devectorOutput, panel);
         break;
       case 'stepOver':
         emu.hardware.Request(HardwareReq.STOP);
         // TODO: implement proper step over by setting a temporary breakpoint after the CALL/RET
         emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
         sendFrameToWebview(true);
-        printDebugState('Step over (NOT IMPLEMENTED):', emu.hardware, emuOutput, panel);
+        printDebugState('Step over (NOT IMPLEMENTED):', emu.hardware, devectorOutput, panel);
         break;
       case 'stepOut':
         emu.hardware.Request(HardwareReq.STOP);
         // TODO: implement proper step out
         emu.hardware?.Request(HardwareReq.EXECUTE_INSTR);
         sendFrameToWebview(true);
-        printDebugState('Step out (NOT IMPLEMENTED):', emu.hardware, emuOutput, panel);
+        printDebugState('Step out (NOT IMPLEMENTED):', emu.hardware, devectorOutput, panel);
         break;
       case 'stepFrame':
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
         sendFrameToWebview(true);
-        printDebugState('Run frame:', emu.hardware, emuOutput, panel);
+        printDebugState('Run frame:', emu.hardware, devectorOutput, panel);
         emitToolbarState(false);
         break;
       case 'step256':
@@ -378,13 +389,13 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
           emu.hardware.Request(HardwareReq.EXECUTE_INSTR);
         }
         sendFrameToWebview(true);
-        printDebugState('Step 256:', emu.hardware, emuOutput, panel);
+        printDebugState('Step 256:', emu.hardware, devectorOutput, panel);
         break;
       case 'restart':
         emu.hardware.Request(HardwareReq.STOP);
         emu.hardware.Request(HardwareReq.RESET);
         emu.hardware.Request(HardwareReq.RESTART);
-        emu.Load(programPath);
+        emu.Load();
         emu.hardware.Request(HardwareReq.RUN);
         emitToolbarState(true);
         tick();
@@ -398,7 +409,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
     pause: () => {
       emu.hardware?.Request(HardwareReq.STOP);
       sendFrameToWebview(true);
-      printDebugState('Pause:', emu.hardware!, emuOutput, panel);
+      printDebugState('Pause:', emu.hardware!, devectorOutput, panel);
       emitToolbarState(false);
     },
     resume: () => {
@@ -414,7 +425,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       emu.hardware.Request(HardwareReq.STOP);
       emu.hardware.Request(HardwareReq.EXECUTE_FRAME_NO_BREAKS);
       sendFrameToWebview(true);
-      printDebugState('Run frame:', emu.hardware, emuOutput, panel);
+      printDebugState('Run frame:', emu.hardware, devectorOutput, panel);
       emitToolbarState(false);
     }
   };
@@ -425,86 +436,42 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   panel.webview.onDidReceiveMessage(msg => {
     if (msg && msg.type === 'key') {
       // keyboard events: forward to keyboard handling
-      const op = emu.hardware?.keyboard?.KeyHandling(msg.code, msg.kind === 'down' ? 'down' : 'up') ?? KbOperation.NONE;
-      if (op === KbOperation.RESET) {
-        emu.hardware?.Request(HardwareReq.RESET);
-      }
-      else if (op === KbOperation.RESTART) {
-        emu.hardware?.Request(HardwareReq.RESTART);
-      }
-    } else if (msg && msg.type === 'stop') {
+      const action: string = msg.string === 'down' ? 'down' : 'up'
+      emu.hardware?.Request(HardwareReq.KEY_HANDLING, { "scancode": msg.code, "action": action });
+
+    }
+    else if (msg && msg.type === 'stop') {
       emu.hardware?.Request(HardwareReq.STOP);
       emitToolbarState(false);
-    } else if (msg && msg.type === 'debugAction') {
+    }
+    else if (msg && msg.type === 'debugAction') {
       handleDebugAction(msg.action);
-    } else if (msg && msg.type === 'memoryDumpControl') {
+    }
+    else if (msg && msg.type === 'memoryDumpControl') {
       handleMemoryDumpControlMessage(msg, panel, emu.hardware);
-    } else if (msg && msg.type === 'speedChange') {
+    }
+    else if (msg && msg.type === 'speedChange') {
       const speedValue = msg.speed;
       if (speedValue === 'max') {
-        currentEmulationSpeed = 'max';
+        project!.settings.speed = 'max';
       } else {
         const parsed = parseFloat(speedValue);
         if (!isNaN(parsed) && parsed > 0) {
-          currentEmulationSpeed = parsed;
+          project!.settings.speed = parsed;
         }
       }
-    } else if (msg && msg.type === 'viewModeChange') {
+    }
+    else if (msg && msg.type === 'viewModeChange') {
       const viewMode = msg.viewMode;
       if (viewMode === 'full' || viewMode === 'noBorder') {
         currentViewMode = viewMode;
         // Re-send current frame with new view mode
         sendFrameToWebview(false);
       }
-    } else if (msg && msg.type === 'toggleRamDiskPersistence') {
-      const enable = !!msg.value;
-      if (enable) {
-        // If enabling, check if we have a path. If not, ask for one.
-        if (!emu.ramDiskDataPath) {
-          vscode.window.showSaveDialog({
-            filters: { 'RAM Disk Image': ['bin', 'dat'] },
-            title: 'Select RAM Disk Persistence File'
-          }).then(saveUri => {
-            if (saveUri) {
-              emu.ramDiskDataPath = saveUri.fsPath;
-              emu.ramDiskClearAfterRestart = false;
-              // Update hardware with new settings
-              if (emu.hardware) {
-                emu.hardware.setRamDiskPersistence(emu.ramDiskDataPath, false);
-              }
-              // Save to project settings if available
-              if (options?.projectPath) {
-                try {
-                  const projectText = fs.readFileSync(options.projectPath, 'utf8');
-                  const projectData = JSON.parse(projectText);
-                  if (!projectData.settings) projectData.settings = {};
-                  projectData.settings.ramDiskDataPath = emu.ramDiskDataPath;
-                  fs.writeFileSync(options.projectPath, JSON.stringify(projectData, null, 4), 'utf8');
-                } catch (e) {}
-              }
-              // Confirm state back to UI
-              panel.webview.postMessage({ type: 'setRamDiskPersistence', value: true });
-            } else {
-              // User cancelled, revert checkbox
-              panel.webview.postMessage({ type: 'setRamDiskPersistence', value: false });
-            }
-          });
-        } else {
-          // Path exists, just enable persistence
-          emu.ramDiskClearAfterRestart = false;
-          if (emu.hardware) {
-            emu.hardware.setRamDiskPersistence(emu.ramDiskDataPath, false);
-          }
-          panel.webview.postMessage({ type: 'setRamDiskPersistence', value: true });
-        }
-      } else {
-        // Disabling persistence
-        emu.ramDiskClearAfterRestart = true;
-        if (emu.hardware) {
-          emu.hardware.setRamDiskPersistence(emu.ramDiskDataPath || '', true);
-        }
-        panel.webview.postMessage({ type: 'setRamDiskPersistence', value: false });
-      }
+    }
+    else if (msg && msg.type === 'ramDiskClearAfterStartChange') {
+      let enable = !!msg.value;
+      project!.settings.ramDiskClearAfterRestart = enable;
     }
   }, undefined, context.subscriptions);
 
@@ -515,7 +482,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       // that may have been discarded while the tab was hidden
       sendFrameToWebview();
       try {
-        panel.webview.postMessage({ type: 'setSpeed', speed: currentEmulationSpeed });
+        panel.webview.postMessage({ type: 'setSpeed', speed: project!.settings.speed });
       } catch (e) {}
     }
   }, null, context.subscriptions);
@@ -525,8 +492,8 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       // Reapply execution highlight when editor visibility changes
       reapplyExecutionHighlight();
       // Reapply data line highlights (reads/writes)
-      if (lastDataAccessSnapshot) {
-        applyDataLineHighlightsFromSnapshot(lastDataAccessSnapshot);
+      if (lastDataAccessLog) {
+        applyDataLineHighlightsFromSnapshot(lastDataAccessLog);
       }
     }
   });
@@ -544,7 +511,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
       // logging
       if (log_every_frame){
-        printDebugState('hw stats:', emu.hardware!, emuOutput, panel, false);
+        printDebugState('hw stats:', emu.hardware!, devectorOutput, panel, false);
       }
 
       running = emu.hardware?.Request(HardwareReq.IS_RUNNING)['isRunning'] ?? false;
@@ -552,10 +519,10 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
       // throttle to approx real-time, adjusted by emulation speed
       const elapsed = performance.now() - startTime;
       let delay: number;
-      if (currentEmulationSpeed === 'max') {
+      if (project!.settings.speed === 'max') {
         delay = 0; // no delay for max speed
       } else {
-        const targetFrameTime = (1000 / 60) / currentEmulationSpeed;
+        const targetFrameTime = (1000 / 60) / project!.settings.speed;
         delay = Math.max(0, targetFrameTime - elapsed);
       }
       await new Promise(resolve => setTimeout(resolve, delay));
@@ -564,7 +531,7 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
 
     // Force hardware stats update (bypassing throttle) when breaking to ensure Register panel is synchronized
     sendFrameToWebview(true);
-    printDebugState('Break:', emu.hardware!, emuOutput, panel);
+    printDebugState('Break:', emu.hardware!, devectorOutput, panel);
     emitToolbarState(false);
   }
 
@@ -572,13 +539,15 @@ export async function openEmulatorPanel(context: vscode.ExtensionContext, logCha
   tick();
 }
 
-export function reloadEmulatorBreakpointsFromFile(): number {
+export function reloadEmulatorBreakpointsFromFile()
+: number
+{
   if (!lastBreakpointSource) return 0;
   return loadBreakpointsFromToken(
-    lastBreakpointSource.programPath,
+    lastBreakpointSource.absoluteRomPath,
     lastBreakpointSource.hardware,
     lastBreakpointSource.log,
-    lastBreakpointSource.debugPath);
+    lastBreakpointSource.absoluteDebugPath);
 }
 
 
@@ -735,21 +704,21 @@ function formatInstructionHoverText(opcode: number, bytes: number[], sourceLine:
   return `opcode 0x${opcode.toString(16).toUpperCase().padStart(2, '0')}`;
 }
 
-export function resolveInstructionHover(document: vscode.TextDocument, position: vscode.Position, address: number): InstructionHoverInfo | undefined {
+export function resolveInstructionHover(
+  document: vscode.TextDocument,
+  position: vscode.Position,
+  address: number)
+  : InstructionHoverInfo | undefined
+{
   if (!lastBreakpointSource?.hardware || currentToolbarIsRunning) return undefined;
-  const memory = lastBreakpointSource.hardware?.memory;
-  if (!memory) return undefined;
-  if (!Number.isFinite(address)) return undefined;
-  const normalizedAddr = (address | 0) & 0xffff;
-  const opcode = memory.GetByte(normalizedAddr);
-  if (typeof opcode !== 'number' || Number.isNaN(opcode)) return undefined;
-  const rawLen = CPU.GetInstrLen(opcode);
-  const instrLen = Math.max(1, Math.min(3, Number.isFinite(rawLen) ? rawLen : 1));
-  const bytes: number[] = [];
-  for (let i = 0; i < instrLen; i++) {
-    const byteVal = memory.GetByte((normalizedAddr + i) & 0xffff);
-    bytes.push(byteVal & 0xff);
-  }
+
+  let hardware = lastBreakpointSource.hardware;
+
+  const normalizedAddr = address & 0xffff;
+  const instr = hardware.Request(HardwareReq.GET_INSTR, { "addr": normalizedAddr })['data'] as number[];
+  const opcode = instr.shift() ?? 0;
+  const bytes = instr;
+
   const sourceLine = document.lineAt(position.line).text;
   const display = formatInstructionHoverText(opcode, bytes, sourceLine);
   return { display, address: normalizedAddr, bytes };
@@ -826,14 +795,14 @@ export function resolveDataDirectiveHover(document: vscode.TextDocument, positio
 
 
 function loadBreakpointsFromToken(
-    programPath: string,
+    romPath: string,
     hardware: Hardware | undefined | null,
     log?: vscode.OutputChannel, debugPath?: string): number
 {
   lastAddressSourceMap = null;
   clearSymbolMetadataCache();
-  if (!hardware || !programPath) return 0;
-  const tokenPath = deriveTokenPath(programPath, debugPath);
+  if (!hardware || !romPath) return 0;
+  const tokenPath = deriveTokenPath(romPath, debugPath);
   if (!tokenPath || !fs.existsSync(tokenPath)) return 0;
 
   let tokens: any;
@@ -874,8 +843,8 @@ function loadBreakpointsFromToken(
 function deriveTokenPath(romPath: string, debugPath?: string): string {
   if (debugPath) return debugPath;
   if (!romPath) return '';
-  if (/\.[^/.]+$/.test(romPath)) return romPath.replace(/\.[^/.]+$/, '.debug.json');
-  return romPath + '.debug.json';
+  if (/\.[^/.]+$/.test(romPath)) return romPath.replace(/\.[^/.]+$/, DEBUG_FILE_SUFFIX);
+  return romPath + DEBUG_FILE_SUFFIX;
 }
 
 type BreakpointMeta = { enabled?: boolean };
@@ -1240,28 +1209,23 @@ function resolvePreferredHighlightLine(filePath: string, addr: number, doc?: vsc
 function highlightSourceFromHardware(hardware: Hardware | undefined | null) {
   if (!hardware || !highlightContext) return;
   try {
-    const state = getDebugState(hardware);
+    const pc = hardware?.Request(HardwareReq.GET_REG_PC)['pc'] ?? 0;
     const debugLine = getDebugLine(hardware);
-    highlightSourceAddress(hardware, state.global_addr, debugLine);
+    highlightSourceAddress(hardware, pc, debugLine);
   } catch (e) {
     /* ignore highlight errors */
   }
 }
 
-function disassembleInstructionAt(hardware: Hardware | undefined | null, addr: number): string | undefined {
-  const memory = hardware?.memory;
-  if (!memory) return undefined;
-  const normalizedAddr = addr & 0xffff;
-  const opcode = memory.GetByte(normalizedAddr);
-  if (typeof opcode !== 'number' || Number.isNaN(opcode)) return undefined;
-  const rawLen = CPU.GetInstrLen(opcode);
-  const instrLen = Math.max(1, Math.min(3, Number.isFinite(rawLen) ? rawLen : 1));
-  const bytes: number[] = [];
-  for (let i = 0; i < instrLen; i++) {
-    const byteVal = memory.GetByte((normalizedAddr + i) & 0xffff);
-    if (typeof byteVal !== 'number' || Number.isNaN(byteVal)) return undefined;
-    bytes.push(byteVal & 0xff);
-  }
+function disassembleInstructionAt(hardware: Hardware | undefined | null, addr: number)
+: string | undefined
+{
+  if (!hardware) return undefined;
+
+  const instr = hardware.Request(HardwareReq.GET_INSTR, { "addr": addr })['data'] as number[];
+  const opcode = instr.shift() ?? 0;
+  const bytes = instr;
+
   const listing = bytes.map(formatHexByte).join(' ');
   const display = formatInstructionHoverText(opcode, bytes, '');
   return `${display} (bytes: ${listing})`;
@@ -1306,7 +1270,7 @@ function highlightSourceAddress(hardware: Hardware | undefined | null, addr?: nu
           renderOptions: {
             after: {
               contentText: `  No source mapping for address ${addrHex}${disasmText}`,
-              color: UNMAPPED_ADDRESS_COLOR,
+              color: consts.UNMAPPED_ADDRESS_COLOR,
               fontStyle: 'italic',
               fontWeight: 'normal'
             }
@@ -1420,15 +1384,16 @@ function buildElementRanges(elements: Map<number, Set<number>>, doc: vscode.Text
   return ranges;
 }
 
-function applyDataLineHighlightsFromSnapshot(snapshot?: MemoryAccessSnapshot) {
+function applyDataLineHighlightsFromSnapshot(snapshot?: MemoryAccessLog) {
   if (!highlightContext) return;
   ensureDataHighlightDecorations(highlightContext);
   if (!snapshot || !dataAddressLookup || !lastSymbolCache || !lastSymbolCache.filePaths.size) {
     clearDataLineHighlights();
-    lastDataAccessSnapshot = null;
+    lastDataAccessLog = null;
     return;
   }
-  lastDataAccessSnapshot = snapshot;
+  lastDataAccessLog = snapshot;
+
   // Accumulate which element indices were accessed for each line
   // bucket maps: fileKey -> Map<line, Set<elementIndex>>
   const accumulate = (addr: number, bucket: Map<string, Map<number, Set<number>>>) => {
@@ -1457,8 +1422,9 @@ function applyDataLineHighlightsFromSnapshot(snapshot?: MemoryAccessSnapshot) {
   };
   const readElements = new Map<string, Map<number, Set<number>>>();
   const writeElements = new Map<string, Map<number, Set<number>>>();
-  snapshot.reads.forEach(addr => accumulate(addr, readElements));
-  snapshot.writes.forEach(addr => accumulate(addr, writeElements));
+  // TODO: improve performance and UI information by using value. Currently we ignore it.
+  snapshot.reads.forEach((value, addr) => accumulate(addr, readElements));
+  snapshot.writes.forEach((value, addr) => accumulate(addr, writeElements));
   for (const editor of vscode.window.visibleTextEditors) {
     const key = normalizeFsPathSafe(editor.document.uri.fsPath);
     const readMap = readElements.get(key);
@@ -1477,12 +1443,14 @@ function clearDataLineHighlights() {
 }
 
 function refreshDataLineHighlights(hardware?: Hardware | null) {
-  if (!hardware?.memory) {
+  // TODO: check if it is useful
+  if (!hardware) {
     clearDataLineHighlights();
-    lastDataAccessSnapshot = null;
+    lastDataAccessLog = null;
     return;
   }
-  applyDataLineHighlightsFromSnapshot(hardware.memory.snapshotAccessLog());
+  const snapshotAccessLog = hardware.Request(HardwareReq.DEBUG_MEM_ACCESS_LOG_GET)['data'] as MemoryAccessLog | undefined;
+  applyDataLineHighlightsFromSnapshot(snapshotAccessLog);
 }
 
 type DirectiveValueRange = { start: number; end: number };
@@ -1557,18 +1525,17 @@ function splitArgsWithRanges(text: string, offset: number): DirectiveValueRange[
   return ranges;
 }
 
+// unitBytes is 1 for byte, 2 for word
 function readMemoryValueForSpan(hardware: Hardware | undefined | null, addr: number, unitBytes: number): number | undefined {
-  if (!hardware?.memory) return undefined;
+  if (!hardware) return undefined;
+
   const normalizedAddr = addr & 0xffff;
-  if (unitBytes <= 1) {
-    return hardware.memory.GetByte(normalizedAddr, AddrSpace.RAM) & 0xff;
-  }
-  let value = 0;
-  for (let i = 0; i < unitBytes; i++) {
-    const byte = hardware.memory.GetByte((normalizedAddr + i) & 0xffff, AddrSpace.RAM) & 0xff;
-    value |= byte << (8 * i);
-  }
-  return value >>> 0;
+  const bytes = hardware.Request(HardwareReq.GET_MEM_RANGE, {"addr": normalizedAddr, "length": unitBytes})['data'] as number[];
+
+  if (unitBytes === 1) return bytes[0];
+
+  const word = (bytes[1] << 8) | bytes[0];
+  return word;
 }
 
 function parseDataLiteralValue(text: string, unitBytes: number): number | undefined {

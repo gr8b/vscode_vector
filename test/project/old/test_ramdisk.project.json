@@ -5,6 +5,6 @@
     "settings": {
         "speed": 1,
         "viewMode": "noBorder",
-        "ramDiskDataPath": "./out/test_ramdisk.ramdata"
+        "ramDiskData": "./out/test_ramdisk.ramdata"
     }
 }

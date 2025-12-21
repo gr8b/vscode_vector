@@ -17,7 +17,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { assemble } from '../assembler';
+import { assemble } from '../assembler/assembler';
 import { AssembleResult } from '../assembler/types';
 
 type DirectiveTestExpectations = {

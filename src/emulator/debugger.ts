@@ -3,22 +3,83 @@ import { HardwareReq } from './hardware_reqs';
 import { CpuState } from './cpu_i8080';
 import { MemState } from './memory';
 import { ReqData } from './hardware_types';
-import DebugData from '../debugData';
+import Breakpoints from './breakpoints';
 import { BpStatus, Breakpoint } from './breakpoint';
+import { DisplayState } from './display';
+import { IOState } from './io';
 
+/////////////////////////////////////////////////////////////
+//
+// Memory Access Log
+//
+/////////////////////////////////////////////////////////////
+
+// Tracks memory access from last break
+export class MemoryAccessLog {
+  // addr -> [value, accessTimes]
+  reads: Map<number, [number, number]>;
+  writes: Map<number, [number, number]>;
+
+  constructor() {
+    this.reads = new Map<number, [number, number]>();
+    this.writes = new Map<number, [number, number]>();
+  }
+
+  Reset(): void {
+    this.reads.clear();
+    this.writes.clear();
+  }
+
+  Read(addr: number, value: number): void {
+    const entry = this.reads.get(addr);
+    if (entry) {
+      entry[1] += 1;
+    } else {
+      this.reads.set(addr, [value, 1]);
+    }
+  }
+
+  Write(addr: number, value: number): void {
+    const entry = this.writes.get(addr);
+    if (entry) {
+      entry[1] += 1;
+    } else {
+      this.writes.set(addr, [value, 1]);
+    }
+  }
+
+  Clone(): MemoryAccessLog {
+    const copy = new MemoryAccessLog();
+    this.reads.forEach((value, key) => {
+      // Deep copy the tuple
+      copy.reads.set(key, [value[0], value[1]]);
+    });
+    this.writes.forEach((value, key) => {
+      copy.writes.set(key, [value[0], value[1]]);
+    });
+    return copy;
+  }
+};
+
+
+/////////////////////////////////////////////////////////////
+//
+// Debugger
+//
+/////////////////////////////////////////////////////////////
 
 export default class Debugger {
-  hardware: Hardware;
-  debugData: DebugData;
+  private hardware: Hardware;
+  private _breakpoints = new Breakpoints();
+  private _memAccessLog = new MemoryAccessLog();
 
   constructor(hardware: Hardware)
   {
     this.hardware = hardware;
-    this.debugData = new DebugData(hardware);
     hardware.AttachDebugFuncs(this.Debug.bind(this), this.DebugReqHandling.bind(this));
   }
 
-  destructor() {
+  Destructor() {
     this.hardware.Request(HardwareReq.DEBUG_ATTACH, {"data": false});
   }
 
@@ -27,97 +88,61 @@ export default class Debugger {
   // attach/dettach debugger, and other operations that change the Hardware
   // states because this func stores the last state of Hardware
   Reset(_resetRecorder: boolean,
-    cpuState: CpuState, memState: MemState
-    /*, IO::State* ioState, Display::State* displayState*/)
+    cpuState: CpuState, memState: MemState,
+    ioState: IOState, displayState: DisplayState)
   {
-    //this.disasm.Reset();
-    this.debugData.Reset();
 
-    // m_lastWritesAddrs.fill(uint32_t(LAST_RW_NO_DATA));
-    // m_lastReadsAddrs.fill(uint32_t(LAST_RW_NO_DATA));
-    // m_lastWritesIdx = 0;
-    // m_lastReadsIdx = 0;
-    // m_memLastRW.fill(0);
+    this._memAccessLog.Reset();
 
     // m_traceLog.Reset();
     // if (_resetRecorder) recorder.Reset(
     //   cpuState, memState, ioState, displayState);
   }
 
-  //////////////////////////////////////////////////////////////
-  //
-  // Debug call from the Hardware thread
-  //
-  //////////////////////////////////////////////////////////////
-
   // Hardware thread
   Debug(cpuState: CpuState, memState: MemState,
-    /*ioState: IOState, displayState: DisplayState*/): boolean
+    ioState: IOState, displayState: DisplayState): boolean
   {
-    /*
-    // instruction check
-    this.debugData.MemRunsUpdate(memState.debug.instrGlobalAddr);
-
     // reads check
+    for (let i = 0; i < memState.debug.readLen; i++)
     {
-      //std::lock_guard<std::mutex> mlock(m_lastRWMutex);
+      const globalAddr = memState.debug.readGlobalAddr[i];
+      const val = memState.debug.read[i];
 
-      for (int i = 0; i < memState.debug.readLen; i++)
-      {
-        GlobalAddr globalAddr = memState.debug.readGlobalAddr[i];
-        uint8_t val = memState.debug.read[i];
+      this._memAccessLog.Read(globalAddr, val);
 
-        this.debugData.MemReadsUpdate(globalAddr);
-
-        this.debugData.GetWatchpoints().Check(Watchpoint::Access::R, globalAddr, val);
-
-        m_lastReadsAddrs[m_lastReadsIdx++] = globalAddr;
-        m_lastReadsIdx %= LAST_RW_MAX;
-      }
+      // TODO: implement watchpoints
+      //this._debugData.GetWatchpoints().Check(Watchpoint::Access::R, globalAddr, val);
     }
 
     // writes check
+    for (let i = 0; i < memState.debug.writeLen; i++)
     {
-      std::lock_guard<std::mutex> mlock(m_lastRWMutex);
+      const globalAddr = memState.debug.writeGlobalAddr[i];
+      const val = memState.debug.write[i];
 
-      for (int i = 0; i < memState.debug.writeLen; i++)
-      {
-        GlobalAddr globalAddr = memState.debug.writeGlobalAddr[i];
-        uint8_t val = memState.debug.write[i];
+      this._memAccessLog.Write(globalAddr, val);
 
-        // check if the memory is read-only
-        auto memEdit = this.debugData.GetMemoryEdit(globalAddr);
-        if (memEdit && memEdit->active && memEdit->readonly) {
-          memState.debug.write[i] = memState.debug.beforeWrite[i];
-          memState.ramP->at(globalAddr) = memState.debug.beforeWrite[i];
-          continue;
-        };
-
-        this.debugData.MemWritesUpdate(globalAddr);
-
-        this.debugData.GetWatchpoints().Check(Watchpoint::Access::W, globalAddr, val);
-
-        m_lastWritesAddrs[m_lastWritesIdx++] = globalAddr;
-        m_lastWritesIdx %= LAST_RW_MAX;
-      }
+      // TODO: implement watchpoints
+      //this._debugData.GetWatchpoints().Check(Watchpoint::Access::W, globalAddr, val);
     }
-
+/*
     // code perf
     // TODO: check if the debugData window is open
-    this.debugData.CheckCodePerfs(cpuState->regs.pc.word, cpuState->cc);
+    this._debugData.CheckCodePerfs(cpuState->regs.pc.word, cpuState->cc);
 */
     let break_ = false;
 /*
     // check scripts
     // TODO: check if the debugData window is open
-    break_ |= this.debugData.GetScripts().Check(
+    break_ |= this._debugData.GetScripts().Check(
       cpuState, memState, ioState, displayState);
 
     // check watchpoint status
-    break_ |= this.debugData.GetWatchpoints().CheckBreak();
+    break_ |= this._debugData.GetWatchpoints().CheckBreak();
 */
     // check breakpoints
-    break_ ||= this.debugData.breakpoints.Check(cpuState, memState);
+    break_ ||= this._breakpoints.Check(cpuState, memState);
 /*
     // tracelog
     m_traceLog.Update(*cpuState, *memState, *displayState);
@@ -131,14 +156,14 @@ export default class Debugger {
   // Hardware thread
   DebugReqHandling(req: HardwareReq, reqData: ReqData,
     cpuState: CpuState, memState: MemState,
-    /*ioState: IOState, displayState: DisplayState*/): ReqData
+    ioState: IOState, displayState: DisplayState): ReqData
   {
     let out: ReqData = {};
 
     switch (req)
     {
     case HardwareReq.DEBUG_RESET:
-      this.Reset(reqData["resetRecorder"], cpuState, memState/*, ioState, displayState*/);
+      this.Reset(reqData["resetRecorder"], cpuState, memState, ioState, displayState);
       break;
 
     //////////////////
@@ -192,38 +217,38 @@ export default class Debugger {
     /////////////////
 
     case HardwareReq.DEBUG_BREAKPOINT_DEL_ALL:
-      this.debugData.breakpoints.Clear();
+      this._breakpoints.Clear();
       break;
 
     case HardwareReq.DEBUG_BREAKPOINT_DEL:
-      this.debugData.breakpoints.Del(reqData["addr"]);
+      this._breakpoints.Del(reqData["addr"]);
       break;
 
     case HardwareReq.DEBUG_BREAKPOINT_ADD: {
-      this.debugData.breakpoints.Add(new Breakpoint(reqData["addr"]));
+      this._breakpoints.Add(new Breakpoint(reqData["addr"]));
       break;
     }
     case HardwareReq.DEBUG_BREAKPOINT_SET_STATUS:
-      this.debugData.breakpoints.SetStatus(
+      this._breakpoints.SetStatus(
         reqData["addr"], reqData["status"] );
       break;
 
     case HardwareReq.DEBUG_BREAKPOINT_ACTIVE:
-      this.debugData.breakpoints.SetStatus(
+      this._breakpoints.SetStatus(
         reqData["addr"], BpStatus.ACTIVE);
       break;
 
     case HardwareReq.DEBUG_BREAKPOINT_DISABLE:
-      this.debugData.breakpoints.SetStatus(
+      this._breakpoints.SetStatus(
         reqData["addr"], BpStatus.DISABLED);
       break;
 
     case HardwareReq.DEBUG_BREAKPOINT_GET_STATUS:
-      out = {"status": this.debugData.breakpoints.GetStatus(reqData["addr"])};
+      out = {"status": this._breakpoints.GetStatus(reqData["addr"])};
       break;
 
     case HardwareReq.DEBUG_BREAKPOINT_GET_UPDATES:
-      out = {"updates": this.debugData.breakpoints.updates};
+      out = {"updates": this._breakpoints.updates};
       break;
 
 
@@ -234,24 +259,24 @@ export default class Debugger {
     /////////////////
 /*
     case HardwareReq.DEBUG_WATCHPOINT_DEL_ALL:
-      this.debugData.GetWatchpoints().Clear();
+      this._debugData.GetWatchpoints().Clear();
       break;
 
     case HardwareReq.DEBUG_WATCHPOINT_DEL:
-      this.debugData.GetWatchpoints().Del(reqData["id"]);
+      this._debugData.GetWatchpoints().Del(reqData["id"]);
       break;
 
     case HardwareReq.DEBUG_WATCHPOINT_ADD: {
       Watchpoint::Data wpData{ reqData["data0"], reqData["data1"] };
-      this.debugData.GetWatchpoints().Add({ std::move(wpData), reqData["comment"] });
+      this._debugData.GetWatchpoints().Add({ std::move(wpData), reqData["comment"] });
       break;
     }
     case HardwareReq.DEBUG_WATCHPOINT_GET_UPDATES:
-      out = nlohmann::json{ {"updates", static_cast<uint64_t>(this.debugData.GetWatchpoints().GetUpdates()) } };
+      out = nlohmann::json{ {"updates", static_cast<uint64_t>(this._debugData.GetWatchpoints().GetUpdates()) } };
       break;
 
     case HardwareReq.DEBUG_WATCHPOINT_GET_ALL:
-      for (const auto& [id, wp] : this.debugData.GetWatchpoints().GetAll())
+      for (const auto& [id, wp] : this._debugData.GetWatchpoints().GetAll())
       {
         out.push_back({
             {"data0", wp.data.data0},
@@ -260,37 +285,24 @@ export default class Debugger {
           });
       }
       break;
-
+*/
     //////////////////
     //
-    // Memory Edits
+    // Memory Access Log
     //
     /////////////////
 
-    case HardwareReq.DEBUG_MEMORY_EDIT_DEL_ALL:
-      this.debugData.DelAllMemoryEdits();
+    case HardwareReq.DEBUG_MEM_ACCESS_LOG_RESET:
+      this._memAccessLog.Reset();
       break;
 
-    case HardwareReq.DEBUG_MEMORY_EDIT_DEL:
-      this.debugData.DelMemoryEdit(reqData["addr"]);
+    case HardwareReq.DEBUG_MEM_ACCESS_LOG_GET:
+      out = {"data": this._memAccessLog.Clone()};
       break;
 
-    case HardwareReq.DEBUG_MEMORY_EDIT_ADD:
-      this.debugData.SetMemoryEdit(reqData);
-      break;
-
-    case HardwareReq.DEBUG_MEMORY_EDIT_GET:
-    {
-      auto memEdit = this.debugData.GetMemoryEdit(reqData["addr"]);
-      if (memEdit)
-      {
-        out = { {"data", memEdit->ToJson()} };
-      }
-      break;
-    }
-
+/*
     case HardwareReq.DEBUG_MEMORY_EDIT_EXISTS:
-      out = { {"data", this.debugData.GetMemoryEdit(reqData["addr"]) != nullptr } };
+      out = { {"data", this._debugData.GetMemoryEdit(reqData["addr"]) != nullptr } };
       break;
 
     //////////////////
@@ -300,20 +312,20 @@ export default class Debugger {
     /////////////////
 
     case HardwareReq.DEBUG_CODE_PERF_DEL_ALL:
-      this.debugData.DelAllCodePerfs();
+      this._debugData.DelAllCodePerfs();
       break;
 
     case HardwareReq.DEBUG_CODE_PERF_DEL:
-      this.debugData.DelCodePerf(reqData["addr"]);
+      this._debugData.DelCodePerf(reqData["addr"]);
       break;
 
     case HardwareReq.DEBUG_CODE_PERF_ADD:
-      this.debugData.SetCodePerf(reqData);
+      this._debugData.SetCodePerf(reqData);
       break;
 
     case HardwareReq.DEBUG_CODE_PERF_GET:
     {
-      auto codePerf = this.debugData.GetCodePerf(reqData["addr"]);
+      auto codePerf = this._debugData.GetCodePerf(reqData["addr"]);
       if (codePerf)
       {
         out = { {"data", codePerf->ToJson()} };
@@ -322,7 +334,7 @@ export default class Debugger {
     }
 
     case HardwareReq.DEBUG_CODE_PERF_EXISTS:
-      out = { {"data", this.debugData.GetCodePerf(reqData["addr"]) != nullptr } };
+      out = { {"data", this._debugData.GetCodePerf(reqData["addr"]) != nullptr } };
       break;
 
     //////////////////
@@ -332,23 +344,23 @@ export default class Debugger {
     /////////////////
 
     case HardwareReq.DEBUG_SCRIPT_DEL_ALL:
-      this.debugData.GetScripts().Clear();
+      this._debugData.GetScripts().Clear();
       break;
 
     case HardwareReq.DEBUG_SCRIPT_DEL:
-      this.debugData.GetScripts().Del(reqData["id"]);
+      this._debugData.GetScripts().Del(reqData["id"]);
       break;
 
     case HardwareReq.DEBUG_SCRIPT_ADD: {
-      this.debugData.GetScripts().Add(reqData);
+      this._debugData.GetScripts().Add(reqData);
       break;
     }
     case HardwareReq.DEBUG_SCRIPT_GET_UPDATES:
-      out = nlohmann::json{ {"updates", static_cast<uint64_t>(this.debugData.GetScripts().GetUpdates()) } };
+      out = nlohmann::json{ {"updates", static_cast<uint64_t>(this._debugData.GetScripts().GetUpdates()) } };
       break;
 
     case HardwareReq.DEBUG_SCRIPT_GET_ALL:
-      for (const auto& [id, script] : this.debugData.GetScripts().GetAll())
+      for (const auto& [id, script] : this._debugData.GetScripts().GetAll())
       {
         out.push_back(script.ToJson());
       }
@@ -374,4 +386,5 @@ export default class Debugger {
 
     return out;
   }
+
 }

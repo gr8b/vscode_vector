@@ -1,6 +1,6 @@
-import * as fs from 'fs';
+import * as type from './type';
 
-export enum AddrSpace { RAM = 0, STACK = 1 }
+export enum AddrSpace { RAM = 0, STACK = 1, GLOBAL = 2 }
 export enum MemType { ROM = 0, RAM = 1 }
 
 export const ROM_LOAD_ADDR = 0x0100;
@@ -15,11 +15,8 @@ export const MEMORY_GLOBAL_LEN = MEMORY_MAIN_LEN + MEMORY_RAMDISK_LEN * RAM_DISK
 
 export const MAPPING_MODE_MASK = 0b11110000;
 
-export type MemoryAccessSnapshot = {
-  reads: number[];
-  writes: number[];
-  values: Record<number, number>;
-};
+export const BOOT_ROM_LEN_MAX = 64 * 1024; // 64KB
+
 
 export class MemMapping {
   pageRam: number = 0;     // 0-1 bits, The index of the RAM Disk 64k page accessed in the Memory-Mapped Mode
@@ -59,19 +56,68 @@ export class MemMapping {
   IsRamModeEnabled(): boolean {
     return this.modeRamA || this.modeRam8 || this.modeRamE;
   }
+  clone(): MemMapping {
+    const copy = new MemMapping();
+    copy.pageRam = this.pageRam;
+    copy.pageStack = this.pageStack;
+    copy.modeStack = this.modeStack;
+    copy.modeRamA = this.modeRamA;
+    copy.modeRam8 = this.modeRam8;
+    copy.modeRamE = this.modeRamE;
+    return copy;
+  }
 };
 
 
 type GetGlobalAddrFuncType = (addr: number, addrSpace: AddrSpace) => number;
 
-export class Update {
+export class MemUpdate {
   mappings: MemMapping[] = Array.from({length: RAM_DISK_MAX}, () => new MemMapping());
   // current active mapping state
   ramdiskIdx = 0;
+
+  clone(): MemUpdate {
+    const copy = new MemUpdate();
+    copy.ramdiskIdx = this.ramdiskIdx;
+    copy.mappings = this.mappings.map(m => m.clone());
+    return copy;
+  }
+};
+
+export class MemDebug{
+			instrGlobalAddr: number = 0;
+			instr: number[] = [0, 0, 0]; // opcode; addrL; addrH
+			instrLen: number = 0;
+			readGlobalAddr: number[] = [0, 0];
+			read: number[] = [0, 0];
+			readLen: number = 0;
+			writeGlobalAddr: number[] = [0, 0];
+			write: number[] = [0, 0];
+			writeLen: number = 0;
+			beforeWrite: number[] = [0, 0];
+
+  Init(): void {
+    this.instrLen = this.readLen = this.writeLen = 0;
+  }
+  clone(): MemDebug {
+    const copy = new MemDebug();
+    copy.instrGlobalAddr = this.instrGlobalAddr;
+    copy.instr = this.instr.slice(0);
+    copy.instrLen = this.instrLen;
+    copy.readGlobalAddr = this.readGlobalAddr.slice(0);
+    copy.read = this.read.slice(0);
+    copy.readLen = this.readLen;
+    copy.writeGlobalAddr = this.writeGlobalAddr.slice(0);
+    copy.write = this.write.slice(0);
+    copy.writeLen = this.writeLen;
+    copy.beforeWrite = this.beforeWrite.slice(0);
+    return copy;
+  }
 };
 
 export class MemState {
-	update: Update = new Update();
+	update: MemUpdate = new MemUpdate();
+  debug: MemDebug = new MemDebug();
   ram: Uint8Array | null = null;
   GetGlobalAddrFunc: GetGlobalAddrFuncType | null = null;
 
@@ -83,118 +129,53 @@ export class MemState {
 }
 
 export class Memory {
-  ram: Uint8Array = new Uint8Array(MEMORY_GLOBAL_LEN);
-  rom: Uint8Array = new Uint8Array(0);
+  _ram: Uint8Array = new Uint8Array(MEMORY_GLOBAL_LEN);
+  _rom: Uint8Array = new Uint8Array(0);
 
-  _state = new MemState(this.GetGlobalAddr.bind(this), this.ram);
+  _state = new MemState(this.GetGlobalAddr.bind(this), this._ram);
 
-  private accessLog = {
-    reads: new Set<number>(),
-    writes: new Set<number>(),
-    values: new Map<number, number>()
-  };
-
-  // number of RAM Disks with mapping enabled
-  // used to detect exceptions
+  // Number of RAM Disks with mapping enabled. This is used to detect exceptions
   mappingsEnabled = 0;
 
   memType: MemType = MemType.ROM;
-  ramDiskClearAfterRestart: boolean = false;
-  ramDiskDataPath: string = '';
+  _ramDiskClearAfterRestart: boolean = false;
+  _pathBootData: string = '';
+  result: type.EmulatorResult = new type.EmulatorResult();
 
-  constructor(pathBootData: string, ramDiskDataPath: string, ramDiskClearAfterRestart: boolean) {
-    this.ramDiskDataPath = ramDiskDataPath;
-    this.ramDiskClearAfterRestart = ramDiskClearAfterRestart;
 
-    // Load ROM if specified
-    if (pathBootData) {
-      try {
-        // check if file exists
-        if (fs.existsSync(pathBootData)) {
-          this.rom = fs.readFileSync(pathBootData);
-        }
-        else {
-          console.error(`ROM file not found: ${pathBootData}`);
-        }
-      } catch (err) {
-        console.error(`Failed to load ROM from ${pathBootData}:`, err);
-        process.exit(1);
-      }
-    }
-
-    // Load RAM disk data if path is provided and file exists
-    // Note: Only load if ramDiskClearAfterRestart is false, otherwise RAM disk should start empty
-    if (ramDiskDataPath && !ramDiskClearAfterRestart) {
-      try {
-        if (fs.existsSync(ramDiskDataPath)) {
-          const ramDiskData = fs.readFileSync(ramDiskDataPath);
-          // Copy RAM disk data to the appropriate region of RAM
-          const ramDiskStart = MEMORY_MAIN_LEN;
-          const ramDiskLength = MEMORY_RAMDISK_LEN * RAM_DISK_MAX;
-          const copyLength = Math.min(ramDiskData.length, ramDiskLength);
-          this.ram.set(ramDiskData.slice(0, copyLength), ramDiskStart);
-        }
-      } catch (err) {
-        console.error(`Failed to load RAM disk data from ${ramDiskDataPath}:`, err);
-        // Continue without RAM disk data
-      }
-    }
-  }
-
-  private normalizeAddr(addr: number): number {
-    return addr & 0xffff;
-  }
-
-  private recordRead(addr: number, value: number) {
-    const normalized = this.normalizeAddr(addr);
-    this.accessLog.reads.add(normalized);
-    this.accessLog.values.set(normalized, value & 0xff);
-  }
-
-  private recordWrite(addr: number, value: number) {
-    const normalized = this.normalizeAddr(addr);
-    this.accessLog.writes.add(normalized);
-    this.accessLog.values.set(normalized, value & 0xff);
-  }
-
-  snapshotAccessLog(): MemoryAccessSnapshot {
-    const values: Record<number, number> = {};
-    this.accessLog.values.forEach((value, key) => {
-      values[key] = value;
-    });
-    return {
-      reads: Array.from(this.accessLog.reads),
-      writes: Array.from(this.accessLog.writes),
-      values
-    };
-  }
-
-  clearAccessLog(): void {
-    this.accessLog.reads.clear();
-    this.accessLog.writes.clear();
-    this.accessLog.values.clear();
-  }
-
-  get state(): MemState {
-    return this._state;
-  }
-
-  Init()
+  constructor(bootRom: Uint8Array | undefined, ramDisk: Uint8Array | undefined, ramDiskClearAfterRestart: boolean = false)
   {
-    if (this.ramDiskClearAfterRestart)
-    {
-      // clear the RAM including ramdisk regions
-      this.ram.fill(0);
+    this._ramDiskClearAfterRestart = ramDiskClearAfterRestart;
+    if (bootRom){
+      if (bootRom.length > BOOT_ROM_LEN_MAX) {
+        this.result.addWarning(`Boot ROM size ${bootRom.length} exceeds max ${BOOT_ROM_LEN_MAX}.`);
+      }
+      else {
+        this._rom = bootRom;
+      }
     }
-    else {
-      // clear the main RAM only
-      this.ram.fill(0, 0, MEMORY_MAIN_LEN);
-    }
+    else this.result.addWarning(`Boot ROM is undefined.`)
 
-    // default to ROM and reset mapping state
+    if (ramDisk && ramDisk.length === MEMORY_RAMDISK_LEN * RAM_DISK_MAX) {
+      this._ram.set(ramDisk, MEMORY_MAIN_LEN);
+    }
+    else this.result.addWarning(`RAM Disk is undefined or has incorrect size.`)
+  }
+
+
+  get ramDisk(): Uint8Array {
+    return this._ram.subarray(MEMORY_MAIN_LEN, MEMORY_GLOBAL_LEN);
+  }
+
+
+  // HW reset (BLK + VVOD keys)
+  Reset()
+  {
+    // clear the global RAM or the main RAM depending on the setting
+    const erase_len = this._ramDiskClearAfterRestart ? MEMORY_GLOBAL_LEN : MEMORY_MAIN_LEN;
+    this._state.ram?.fill(0, 0, erase_len);
+
     this.memType = MemType.ROM;
-
-    // recompute active mapping (clear mappings or apply defaults)
     this.InitRamDiskMapping();
   }
 
@@ -212,69 +193,49 @@ export class Memory {
 	this.InitRamDiskMapping();
   }
 
-  setRamDiskPersistence(path: string, clearAfterRestart: boolean) {
-    this.ramDiskDataPath = path;
-    this.ramDiskClearAfterRestart = clearAfterRestart;
-  }
-
-  SaveRamDiskData(): void {
-    if (!this.ramDiskDataPath || this.ramDiskClearAfterRestart) {
-      return;
-    }
-
-    try {
-      // Extract RAM disk data from the RAM buffer
-      const ramDiskStart = MEMORY_MAIN_LEN;
-      const ramDiskLength = MEMORY_RAMDISK_LEN * RAM_DISK_MAX;
-      const ramDiskData = this.ram.slice(ramDiskStart, ramDiskStart + ramDiskLength);
-
-      // Save to file
-      fs.writeFileSync(this.ramDiskDataPath, ramDiskData);
-    } catch (err) {
-      console.error(`Failed to save RAM disk data to ${this.ramDiskDataPath}:`, err);
-    }
-  }
-
   SetMemType(_memType: MemType) {
 	this.memType = _memType;
   }
 
   SetRam(_addr: number, _data: Uint8Array) {
-    this.ram.set(_data, _addr);
+    this._ram.set(_data, _addr);
   }
 
   SetByteGlobal(globalAddr: number, data: number) {
-    this.ram[globalAddr] = data;
+    this._ram[globalAddr] = data;
   }
 
   GetByteGlobal(globalAddr: number): number {
-    return this.ram[globalAddr];
+    return this._ram[globalAddr];
   }
 
   GetByte(addr: number, addrSpace: AddrSpace = AddrSpace.RAM): number {
   const globalAddr = this.GetGlobalAddr(addr, addrSpace);
 
-  return this.memType === MemType.ROM && globalAddr < this.rom.length ?
-    this.rom[globalAddr] : this.ram[globalAddr];
+  return this.memType === MemType.ROM && globalAddr < this._rom.length ?
+    this._rom[globalAddr] : this._ram[globalAddr];
   }
 
+  // accessed by the CPU for instruction fetch
+  // byteNum = 0 for the first byte stored by instr, 1 for the second
+  // byteNum is 0, 1, or 2
   CpuReadInstr(addr: number, addrSpace: AddrSpace, byteNum: number): number {
     const globalAddr = this.GetGlobalAddr(addr, addrSpace);
-    const val = this.memType === MemType.ROM && globalAddr < this.rom.length ?
-      this.rom[globalAddr] : this.ram[globalAddr];
+    const val = this.memType === MemType.ROM && globalAddr < this._rom.length ?
+      this._rom[globalAddr] : this._ram[globalAddr];
 
-    // TODO: fix the debug later
-    // this.mState.debug.instrGlobalAddr = _byteNum === 0 ? globalAddr : this.mState.debug.instrGlobalAddr;
-    // this.mState.debug.instr.array[_byteNum] = val;
-
+    // debug
+    if (byteNum === 0) {
+      this._state.debug.instrGlobalAddr = globalAddr;
+    }
+    this._state.debug.instr[byteNum] = val;
     return val;
   }
 
-  // CpuInvokesRst7()
-  // {
-    // TODO: fix the debug later
-    // m_state.debug.instr.array[0] = 0xFF; // OPCODE_RST7
-  //}
+  CpuInvokesRst7()
+  {
+    this._state.debug.instr[0] = 0xFF; // OPCODE_RST7
+  }
 
   // accessed by the CPU
   // byteNum = 0 for the first byte stored by instr, 1 for the second
@@ -283,14 +244,12 @@ export class Memory {
     const globalAddr = this.GetGlobalAddr(addr, addrSpace);
 
     // debug
-    // TODO: fix the debug later
-    // this.mState.debug.readGlobalAddr[byteNum] = globalAddr;
-    // this.mState.debug.readLen = byteNum + 1;
+    this._state.debug.readGlobalAddr[byteNum] = globalAddr;
+    this._state.debug.readLen = byteNum + 1;
 
     // return byte
-    const value = this.memType === MemType.ROM && globalAddr < this.rom.length ?
-      this.rom[globalAddr] : this.ram[globalAddr];
-    this.recordRead(addr, value);
+    const value = this.memType === MemType.ROM && globalAddr < this._rom.length ?
+      this._rom[globalAddr] : this._ram[globalAddr];
     return value;
   }
 
@@ -301,25 +260,22 @@ export class Memory {
     const globalAddr = this.GetGlobalAddr(addr, addrSpace);
 
     // debug
-    // TODO: fix the debug later
-    // this.mState.debug.beforeWrite[byteNum] = this.ram[globalAddr];
-    // this.mState.debug.writeGlobalAddr[byteNum] = globalAddr;
-    // this.mState.debug.writeLen = byteNum + 1;
-
-    // this.mState.debug.write[byteNum] = value;
+    this._state.debug.beforeWrite[byteNum] = this._ram[globalAddr];
+    this._state.debug.writeGlobalAddr[byteNum] = globalAddr;
+    this._state.debug.writeLen = byteNum + 1;
+    this._state.debug.write[byteNum] = value;
 
     // store byte
-    this.ram[globalAddr] = value;
-    this.recordWrite(addr, value);
+    this._ram[globalAddr] = value;
   }
 
   // Read 4 bytes from every screen buffer.
   // All of these bytes are visually at the same position on the screen
   GetScreenBytes(screenAddrOffset: number): number {
-    const byte8 = this.ram[0x8000 + screenAddrOffset];
-    const byteA = this.ram[0xA000 + screenAddrOffset];
-    const byteC = this.ram[0xC000 + screenAddrOffset];
-    const byteE = this.ram[0xE000 + screenAddrOffset];
+    const byte8 = this._ram[0x8000 + screenAddrOffset];
+    const byteA = this._ram[0xA000 + screenAddrOffset];
+    const byteC = this._ram[0xC000 + screenAddrOffset];
+    const byteE = this._ram[0xE000 + screenAddrOffset];
     return (byte8 << 24) | (byteA << 16) | (byteC << 8) | byteE;
   }
 
@@ -357,9 +313,9 @@ export class Memory {
 
   // It raises an exception if the mapping is enabled for more than one RAM Disk.
   // It used the first enabled RAM Disk during an exception
-  SetRamDiskMode(diskIdx: number, data: number)
+  SetRamDiskMode(fddIdx: number, data: number)
   {
-    this._state.update.mappings[diskIdx].byte = data;
+    this._state.update.mappings[fddIdx].byte = data;
 
     // Check how many mappings are enabled
     this.mappingsEnabled = 0;
@@ -384,6 +340,16 @@ export class Memory {
     this.mappingsEnabled = 0;
     return exception;
   }
+
+
+  get state(): MemState {
+    return this._state;
+  }
+
+  get ram(): Uint8Array {
+    return this._ram;
+  }
+
 }
 
 export default Memory;

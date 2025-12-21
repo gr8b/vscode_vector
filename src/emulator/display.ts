@@ -107,7 +107,7 @@ export class Display {
     this.PrebakeFullPalette();
     this.state.frameBuffer = this.frameBuffer;
     this.state.BuffUpdate = this.BuffUpdate.bind(this);
-    this.Init();
+    this.Reset();
   }
 
   // rasterizes the memory into the frame buff
@@ -132,7 +132,8 @@ export class Display {
     }
   }
 
-  Init()
+  // HW reset (BLK + VVOD keys)
+  Reset()
   {
     this.state.update.framebufferIdx = 0;
     this.frameBuffer.fill(0xff000000);
@@ -151,7 +152,7 @@ export class Display {
 
     if (commitTime || scrollTime)
     {
-      if ((this.io?.GetDisplayMode() ?? IO.MODE_256) == IO.MODE_256) {
+      if ((this.io?.displayMode ?? IO.MODE_256) == IO.MODE_256) {
         this.FillActiveArea256PortHandling(rasterizedPixels);
       }
       else {
@@ -159,7 +160,7 @@ export class Display {
       }
     }
     else {
-      if ((this.io?.GetDisplayMode() ?? IO.MODE_256) == IO.MODE_256) {
+      if ((this.io?.displayMode ?? IO.MODE_256) == IO.MODE_256) {
         this.FillActiveArea256(rasterizedPixels);
       }
       else {
@@ -309,7 +310,7 @@ export class Display {
     {
       rasterPixel = this.rasterPixel;
       if (rasterLine == SCAN_ACTIVE_AREA_TOP && rasterPixel == SCROLL_COMMIT_PXL) {
-        this.state.update.scrollIdx = this.io?.GetScroll() ?? SCROLL_DEFAULT;
+        this.state.update.scrollIdx = this.io?.scroll ?? SCROLL_DEFAULT;
       }
 
       let colorIdx = this.BytesToColorIdx256(screenBytes, bitIdx);
@@ -347,7 +348,7 @@ export class Display {
       rasterPixel = this.rasterPixel;
 
       if (rasterLine == SCAN_ACTIVE_AREA_TOP && rasterPixel == SCROLL_COMMIT_PXL) {
-        this.state.update.scrollIdx = this.io?.GetScroll() ?? SCROLL_DEFAULT;
+        this.state.update.scrollIdx = this.io?.scroll ?? SCROLL_DEFAULT;
       }
 
       let colorIdx = this.BytesToColorIdx512(screenBytes, pxlIdx);
@@ -397,6 +398,7 @@ export class Display {
 
   IsIRQ(): boolean { return this.state.update.irq; }
 
+  // TODO: optimize by not making a copy
   GetFrame(vsync: boolean = true): Uint32Array
   {
     this.gpuBuffer.set(vsync ? this.backBuffer : this.frameBuffer);
@@ -469,7 +471,7 @@ export class Display {
       {
         let rasterizedPixels = Math.min(ACTIVE_AREA_RIGHT - rasterPixel, RASTERIZED_PXLS_MAX);
 
-        if ((this.io?.GetDisplayMode() ?? IO.MODE_256) == IO.MODE_256) {
+        if ((this.io?.displayMode ?? IO.MODE_256) == IO.MODE_256) {
           this.FillActiveArea256(rasterizedPixels);
         }
         else {
@@ -495,7 +497,7 @@ export class Display {
         if (rasterizedPixels < RASTERIZED_PXLS_MAX)
         {
           rasterizedPixels = RASTERIZED_PXLS_MAX - rasterizedPixels;
-          if ((this.io?.GetDisplayMode() ?? IO.MODE_256) == IO.MODE_256) {
+          if ((this.io?.displayMode ?? IO.MODE_256) == IO.MODE_256) {
             this.FillActiveArea256(rasterizedPixels);
           }
           else {
@@ -538,5 +540,4 @@ export class Display {
 	get framebufferIdx(): number { return this.state.update.framebufferIdx; };
   get scrollIdx(): number { return this.state.update.scrollIdx; };
 }
-
 export default Display;

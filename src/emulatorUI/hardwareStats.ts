@@ -1,7 +1,8 @@
 import { Hardware } from '../emulator/hardware';
 import { FRAME_W } from '../emulator/display';
-import Memory, { AddrSpace, MAPPING_MODE_MASK } from '../emulator/memory';
+import Memory, { AddrSpace, MAPPING_MODE_MASK, MemMapping } from '../emulator/memory';
 import { CpuState } from '../emulator/cpu_i8080';
+import { HardwareReq } from '../emulator/hardware_reqs';
 
 const MEMORY_ADDRESS_MASK = 0xffff;
 const STACK_SAMPLE_OFFSETS = [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10];
@@ -11,21 +12,10 @@ let hwStatsStartTime = Date.now();
 let hwStatsLastUpdate: number | null = null;
 let hwStatsFrameCountdown = HW_STATS_FRAME_INTERVAL;
 
+// TODO: optimize clamp16 usage throughout the codebase
 const clamp16 = (value: number): number => (Number(value) >>> 0) & MEMORY_ADDRESS_MASK;
 
 type StackEntry = { offset: number; value: number };
-
-export type RamDiskMappingSnapshot = {
-  idx: number;
-  byte: number;
-  enabled: boolean;
-  pageRam: number;
-  pageStack: number;
-  modeStack: boolean;
-  modeRamA: boolean;
-  modeRam8: boolean;
-  modeRamE: boolean;
-};
 
 export type HardwareStatsMessage = {
   type: 'hardwareStats';
@@ -69,8 +59,8 @@ export type HardwareStatsMessage = {
   peripherals: {
     ramDisk: {
       activeIndex: number;
-      activeMapping: RamDiskMappingSnapshot | null;
-      mappings: RamDiskMappingSnapshot[];
+      activeMapping: MemMapping | null;
+      mappings: MemMapping[];
     };
     fdc: {
       available: boolean;
@@ -91,54 +81,41 @@ function readStackWord(memory: Memory | undefined | null, addr: number): number 
 }
 
 function collectHardwareStats(hardware: Hardware | undefined | null): HardwareStatsMessage | null {
-  if (!hardware || !hardware.cpu) return null;
-  const cpuState = hardware.cpu.state ?? new CpuState();
+  if (!hardware) return null;
+
+  const hwStats = hardware.Request(HardwareReq.GET_HW_MAIN_STATS);
+  const cpuState: CpuState = hwStats["cpu_state"];
+
   const now = Date.now();
   const uptimeMs = Math.max(0, now - hwStatsStartTime);
   const deltaMs = hwStatsLastUpdate ? Math.max(0, now - hwStatsLastUpdate) : 0;
   hwStatsLastUpdate = now;
 
   const stackEntries: StackEntry[] = [];
-  if (hardware.memory) {
-    for (const offset of STACK_SAMPLE_OFFSETS) {
-      const addr = clamp16(cpuState.regs.sp.word + offset);
-      const value = readStackWord(hardware.memory, addr);
-      if (value === null) continue;
-      stackEntries.push({ offset, value });
-    }
+  const sp = cpuState.regs.sp.word;
+  const stack_sample: number[] = hardware.Request(HardwareReq.GET_STACK_SAMPLE, { "addr": sp })["data"];
+  // TODO: optimize top use the request result directly without copying
+  for (const offset of STACK_SAMPLE_OFFSETS)
+  {
+    const word: number = stack_sample.shift() ?? 0;
+    stackEntries.push({ offset, value: word });
   }
+  const mByte = hwStats["m"];
 
-  const display = hardware.display;
-  const rasterLine = display?.rasterLine ?? 0;
-  const rasterPixel = display?.rasterPixel ?? 0;
-  const frameCc = Math.floor((rasterPixel + rasterLine * FRAME_W) / 4);
-  const framebufferIdx = display?.framebufferIdx ?? 0;
-  const scrollIdx = display?.scrollIdx ?? 0xff;
-  const frames = display?.frameNum ?? 0;
+  const rasterPixel = hwStats["rasterPixel"];
+  const rasterLine = hwStats["rasterLine"];
+  const scrollIdx = hwStats["scrollIdx"];
+  const frames = hwStats["frameNum"]
+  const frameCc = hwStats["frameCc"];
+  const framebufferIdx = frameCc >> 2;
 
-  const displayMode = hardware.io ? (hardware.io.GetDisplayMode() ? '512' : '256') : '256';
-  const rusLat = hardware.io?.state?.ruslat ?? false;
 
-  const ramState = hardware.memory?.state;
-  const mappings = ramState?.update?.mappings ?? [];
-  const ramdiskIdx = ramState?.update?.ramdiskIdx ?? 0;
-  const ramDiskMappings = mappings.map((mapping, idx) => {
-    const byte = mapping.byte;
-    return {
-      idx,
-      byte,
-      enabled: (byte & MAPPING_MODE_MASK) !== 0,
-      pageRam: mapping.pageRam,
-      pageStack: mapping.pageStack,
-      modeStack: mapping.modeStack,
-      modeRamA: mapping.modeRamA,
-      modeRam8: mapping.modeRam8,
-      modeRamE: mapping.modeRamE
-    };
-  });
+  const displayMode = hwStats["displayMode"] ? '512' : '256';
+  const rusLat = hwStats["rusLat"] ?? false;
 
-  const hlWord = clamp16(cpuState.regs.hl.word);
-  const mByte = hardware.memory ? (hardware.memory.GetByte(hlWord, AddrSpace.RAM) & 0xff) : null;
+  const ramDiskState = hardware.Request(HardwareReq.GET_MEMORY_MAPPINGS);
+  const ramdiskIdx = ramDiskState["ramdiskIdx"] as number;
+  const ramdiskMappings = ramDiskState["mappings"] as MemMapping[];
 
   return {
     type: 'hardwareStats',
@@ -146,12 +123,12 @@ function collectHardwareStats(hardware: Hardware | undefined | null): HardwareSt
     uptimeMs,
     deltaMs,
     regs: {
-      pc: clamp16(cpuState.regs.pc.word),
-      sp: clamp16(cpuState.regs.sp.word),
-      af: clamp16(cpuState.regs.af.word),
-      bc: clamp16(cpuState.regs.bc.word),
-      de: clamp16(cpuState.regs.de.word),
-      hl: hlWord,
+      pc: cpuState.regs.pc.word,
+      sp: cpuState.regs.sp.word,
+      af: cpuState.regs.af.word,
+      bc: cpuState.regs.bc.word,
+      de: cpuState.regs.de.word,
+      hl: cpuState.regs.hl.word,
       m: mByte
     },
     flags: {
@@ -166,11 +143,12 @@ function collectHardwareStats(hardware: Hardware | undefined | null): HardwareSt
       entries: stackEntries
     },
     hardware: {
-      cycles: hardware.cpu.cc ?? 0,
+      cycles: cpuState.cc,
       frames,
       frameCc,
       rasterLine,
       rasterPixel,
+      // TODO: check if it is useful to have both frameCc and framebufferIdx
       framebufferIdx,
       scrollIdx,
       displayMode,
@@ -182,8 +160,8 @@ function collectHardwareStats(hardware: Hardware | undefined | null): HardwareSt
     peripherals: {
       ramDisk: {
         activeIndex: ramdiskIdx,
-        activeMapping: ramDiskMappings[ramdiskIdx] ?? null,
-        mappings: ramDiskMappings
+        activeMapping: ramdiskMappings[ramdiskIdx],
+        mappings: ramdiskMappings
       },
       fdc: {
         available: false

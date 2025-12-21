@@ -1,7 +1,7 @@
 {
-  "name": "vscode-vector",
+  "name": "devector",
   "displayName": "Vector 06c Asm + Debugger",
-  "description": "VS Code extension: assemble i8080 asm and run a simple debug session.",
+  "description": "Assemble and run Intel 8080 asm on a Vector 06c VM with debugger.",
   "version": "0.1.10",
   "publisher": "AlexFedotovskikh",
   "icon": "images/icon.png",
@@ -30,14 +30,13 @@
     "pngjs": "^7.0.0"
   },
   "activationEvents": [
-    "onCommand:i8080.compile",
     "onLanguage:asm",
-    "onCommand:i8080.run",
-    "onCommand:i8080.pause",
-    "onCommand:i8080.resume",
-    "onCommand:i8080.stepFrame",
-    "onCommand:i8080.compileProject",
-    "onCommand:i8080.createProject",
+    "onCommand:devector.run",
+    "onCommand:devector.pause",
+    "onCommand:devector.resume",
+    "onCommand:devector.stepFrame",
+    "onCommand:devector.compileProject",
+    "onCommand:devector.createProject",
     "onDebug"
   ],
   "contributes": {
@@ -63,50 +62,46 @@
     ],
     "commands": [
       {
-        "command": "i8080.compile",
-        "title": "Compile i8080 Assembly"
+        "command": "devector.run",
+        "title": "Run Devector Emulator"
       },
       {
-        "command": "i8080.run",
-        "title": "Run i8080 Emulator"
+        "command": "devector.pause",
+        "title": "Pause Devector Emulator"
       },
       {
-        "command": "i8080.pause",
-        "title": "Pause i8080 Emulator"
+        "command": "devector.resume",
+        "title": "Resume Devector Emulator"
       },
       {
-        "command": "i8080.resume",
-        "title": "Resume i8080 Emulator"
-      },
-      {
-        "command": "i8080.stepFrame",
+        "command": "devector.stepFrame",
         "title": "Run one frame and Pause"
       }
       ,
       {
-        "command": "i8080.toggleBreakpoint",
+        "command": "devector.toggleBreakpoint",
         "title": "Toggle Breakpoint"
       },
       {
-        "command": "i8080.createProject",
-        "title": "Create i8080 Project"
+        "command": "devector.createProject",
+        "title": "Create Devector Project"
       },
       {
-        "command": "i8080.compileProject",
-        "title": "Compile i8080 Project"
+        "command": "devector.compileProject",
+        "title": "Compile Devector Project"
       }
     ],
     "keybindings": [
       {
         "key": "f9",
-        "command": "i8080.toggleBreakpoint",
+        "command": "devector.toggleBreakpoint",
         "when": "editorTextFocus && !editorReadonly && editorLangId == asm"
       }
     ],
     "debuggers": [
       {
-        "type": "i8080",
-        "label": "Intel 8080 Debugger",
+        "type": "devector",
+        "label": "Devector Debugger",
         "program": "./out/debugAdapter.js",
         "configurationAttributes": {
           "launch": {
@@ -130,7 +125,7 @@
     "menus": {
       "editor/context": [
         {
-          "command": "i8080.toggleBreakpoint",
+          "command": "devector.toggleBreakpoint",
           "group": "navigation",
           "when": "editorLangId == asm"
         }

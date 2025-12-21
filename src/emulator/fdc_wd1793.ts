@@ -5,8 +5,10 @@
 // https://github.com/svofski/vector06sdl/blob/master/src/fd1793.h
 // and the C++ implementation from Devector project
 
-import * as fs from 'fs';
-import * as path from 'path';
+import { EMPTY_MARKER } from "../tools/fddimage";
+
+
+export type FdcDiskImage = {fddIdx: number, data: Uint8Array, path: string};
 
 // ============================================================================
 // FDD Constants (from fdd_consts.h)
@@ -104,30 +106,43 @@ export class FDisk {
     mounted: boolean = false;
     reads: number = 0;
     writes: number = 0;
+    fddIdx: number = 0;
 
     constructor() {
         this.data = new Uint8Array(FDD_SIZE);
         this.header = new Uint8Array(6);
     }
 
-    Mount(diskData: Uint8Array, diskPath: string): void {
+    Mount(img: FdcDiskImage): FdcDiskImage {
         // Copy disk data
-        const copyLen = Math.min(diskData.length, FDD_SIZE);
-        this.data.set(diskData.subarray(0, copyLen));
-        // Fill remaining with zeros if source is smaller
+        const ret = { fddIdx: img.fddIdx, data: this.data, path: this.path };
+        const copyLen = Math.min(img.data.length, FDD_SIZE);
+        this.data = img.data.slice(0, copyLen);
+        // Fill remaining with EMPTY_MARKER if source is smaller
         if (copyLen < FDD_SIZE) {
-            this.data.fill(0, copyLen);
+            this.data.fill(EMPTY_MARKER, copyLen);
         }
-        this.path = diskPath;
+        this.path = img.path;
+        this.fddIdx = img.fddIdx;
         this.mounted = true;
         this.updated = false;
         this.reads = 0;
         this.writes = 0;
+
+        return ret;
     }
 
-    GetData(): Uint8Array {
-        return this.data;
+    Dismount(): FdcDiskImage {
+        const ret = { fddIdx: this.fddIdx, data: this.data, path: this.path };
+        this.mounted = false;
+        this.path = '';
+        this.updated = false;
+        this.reads = 0;
+        this.writes = 0;
+        this.header.fill(0);
+        return ret;
     }
+
 
     GetDisk(): FDisk | null {
         return this.mounted ? this : null;
@@ -156,14 +171,9 @@ export class Fdc1793 {
     private headerPtr: number = 0;  // Pointer for reading header data
     private readingHeader: boolean = false; // Flag for READ-ADDRESS command
     private disk: FDisk | null = null; // Current disk image
-    private fddDataPath: string = ''; // Path to FDD data file for persistence
 
-    constructor(fddDataPath: string = '') {
-        this.fddDataPath = fddDataPath;
-        this.disks = [];
-        for (let i = 0; i < Fdc1793.DRIVES_MAX; i++) {
-            this.disks.push(new FDisk());
-        }
+    constructor() {
+        this.disks = Array.from({ length: Fdc1793.DRIVES_MAX }, () => new FDisk());
         this.regs = new Uint8Array(5);
         this.Reset();
     }
@@ -213,12 +223,21 @@ export class Fdc1793 {
     /**
      * Mount a disk image to a drive.
      */
-    Mount(driveIdx: number, data: Uint8Array, path: string): void {
-        const idx = driveIdx % Fdc1793.DRIVES_MAX;
-        this.disks[idx].Mount(data, path);
+    Mount(img: FdcDiskImage): FdcDiskImage {
+        const idx = img.fddIdx % Fdc1793.DRIVES_MAX;
+        const ret = this.disks[idx].Mount(img);
         if (idx === this.drive) {
             this.Reset();
         }
+        return ret;
+    }
+
+    DismountAll(): FdcDiskImage[] {
+        const ret = [];
+        for (let i = 0; i < Fdc1793.DRIVES_MAX; i++) {
+            ret.push(this.disks[i].Dismount());
+        }
+        return ret;
     }
 
     /**
@@ -564,50 +583,11 @@ export class Fdc1793 {
     }
 
     /**
-     * Get a copy of the disk image data.
-     */
-    GetFddImage(driveIdx: number): Uint8Array {
-        const idx = driveIdx % Fdc1793.DRIVES_MAX;
-        return new Uint8Array(this.disks[idx].data);
-    }
-
-    /**
      * Reset the updated flag for a drive.
      */
     ResetUpdate(driveIdx: number): void {
         const idx = driveIdx % Fdc1793.DRIVES_MAX;
         this.disks[idx].updated = false;
-    }
-
-    /**
-     * Save FDD data to file if it has been updated and fddDataPath is configured.
-     * Similar to SaveRamDiskData in memory.ts
-     */
-    SaveFddData(): void {
-        if (!this.fddDataPath) {
-            return;
-        }
-
-        try {
-            // Find the first mounted and updated disk
-            for (let i = 0; i < Fdc1793.DRIVES_MAX; i++) {
-                const disk = this.disks[i];
-                if (disk.mounted && disk.updated) {
-                    // Create parent directory (mkdirSync with recursive handles existing directories)
-                    const parentDir = path.dirname(this.fddDataPath);
-                    fs.mkdirSync(parentDir, { recursive: true });
-                    // Save the disk data to file
-                    fs.writeFileSync(this.fddDataPath, disk.data);
-                    console.log(`FDD data saved to ${this.fddDataPath} (drive ${i})`);
-                    // Reset the updated flag
-                    disk.updated = false;
-                    // Only save the first updated disk
-                    return;
-                }
-            }
-        } catch (err) {
-            console.error(`Failed to save FDD data to ${this.fddDataPath}:`, err);
-        }
     }
 }
 

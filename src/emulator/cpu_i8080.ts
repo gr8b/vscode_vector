@@ -50,6 +50,9 @@ export class RegPair {
     this.h = (value >> 8) & 0xff;
     this.l = value & 0xff;
   }
+  clone(): RegPair {
+    return new RegPair(this.word);
+  }
 }
 
 export class Reg {
@@ -63,6 +66,9 @@ export class Reg {
   }
   set v(val: number) {
     this._v = val & 0xff;
+  }
+  clone(): Reg {
+    return new Reg(this._v);
   }
 }
 
@@ -106,6 +112,11 @@ export class AF {
     this.a = (val >> 8) & 0xff;
     this.f = val;
   }
+  clone(): AF {
+    const copy = new AF();
+    copy.word = this.word;
+    return copy;
+  }
 }
 
 export type Registers = {
@@ -127,6 +138,15 @@ export class Int {
   iff: boolean = false; // set by the 50 Hz interruption timer. it is ON until an iterruption call (RST7)
   hlta: boolean = false; // indicates that HLT instruction is executed
   eiPending: boolean = false; // if set, the interruption call is pending until the next instruction
+  clone(): Int {
+    const copy = new Int();
+    copy.mc = this.mc;
+    copy.inte = this.inte;
+    copy.iff = this.iff;
+    copy.hlta = this.hlta;
+    copy.eiPending = this.eiPending;
+    return copy;
+  }
 }
 
 export class CpuState{
@@ -144,6 +164,24 @@ export class CpuState{
     wz: new RegPair()
   };
   ints: Int = new Int();
+  clone(): CpuState {
+    const copy = new CpuState();
+    copy.cc = this.cc;
+    copy.regs = {
+      pc: this.regs.pc.clone(),
+      sp: this.regs.sp.clone(),
+      af: this.regs.af.clone(),
+      bc: this.regs.bc.clone(),
+      de: this.regs.de.clone(),
+      hl: this.regs.hl.clone(),
+      ir: this.regs.ir.clone(),
+      tmp: this.regs.tmp.clone(),
+      act: this.regs.act.clone(),
+      wz: this.regs.wz.clone()
+    };
+    copy.ints = this.ints.clone();
+    return copy;
+  }
 }
 
 export default class CPU
@@ -242,12 +280,18 @@ export default class CPU
     this.Init();
   }
 
-  Init() {
-    // TODO: all regs must be rundom at init
-    this._state.regs.af.word = PSW_INIT;
-    this._state.regs.bc.word = 0;
-    this._state.regs.de.word = 0;
-    this._state.regs.hl.word = 0;
+  Init(rndRegs: boolean = false) {
+    if (rndRegs) {
+      this._state.regs.af.word = Math.floor(Math.random() * 0x100);
+      this._state.regs.bc.word = Math.floor(Math.random() * 0x10000);
+      this._state.regs.de.word = Math.floor(Math.random() * 0x10000);
+      this._state.regs.hl.word = Math.floor(Math.random() * 0x10000);
+    } else {
+      this._state.regs.af.word = PSW_INIT;
+      this._state.regs.bc.word = 0;
+      this._state.regs.de.word = 0;
+      this._state.regs.hl.word = 0;
+    }
 
     this.Reset();
   }
@@ -276,8 +320,7 @@ export default class CPU
         this._state.ints.iff = false;
         this._state.ints.hlta = false;
         this._state.regs.ir.v = OPCODE_RST7;
-        // TODO: check this
-        //this.memory?.CpuInvokesRst7();
+        this.memory?.CpuInvokesRst7();
       }
       // normal instruction execution
       else

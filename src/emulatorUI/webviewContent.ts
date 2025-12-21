@@ -102,8 +102,8 @@ export function getWebviewContent() {
       </select>
     </label>
     <label>
-      Persist RAM Disk
-      <input type="checkbox" id="ram-disk-persist" />
+      Clear RAM Disk After Restart
+      <input type="checkbox" id="ram-disk-clear-after-restart" />
     </label>
     <label>
       View:

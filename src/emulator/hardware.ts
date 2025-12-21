@@ -1,16 +1,15 @@
 import { HardwareReq } from './hardware_reqs';
 import CPU, { CpuState } from './cpu_i8080';
-import Memory, { MemState } from './memory';
+import Memory, { MEMORY_GLOBAL_LEN, MEMORY_MAIN_LEN, AddrSpace } from './memory';
 import IO from './io';
-import { Keyboard } from './keyboard';
-import { Display } from './display';
+import { KbOperation, Keyboard } from './keyboard';
+import { Display, FRAME_W } from './display';
 import { TimerI8253 } from './timer_i8253';
 import { AYWrapper, SoundAY8910 } from './sound_ay8910';
 import { Fdc1793 } from './fdc_wd1793';
 import { DebugFunc, DebugReqHandlingFunc, ReqData } from './hardware_types';
-import { cp } from 'fs';
 import { Audio } from './audio';
-import { setFlagsFromString } from 'v8';
+import * as type from './type';
 
 enum Status {
 			RUN = 0,
@@ -36,107 +35,82 @@ const execDelays: number[] = [
 	0.0
 ];
 
+// Extention thread. Use Hardware.Request(HardwareReq....) to interact with Hardware.
 export class Hardware
 {
   status: Status = Status.STOP;
   execSpeed: ExecSpeed = ExecSpeed.NORMAL; // execution speed
 
-  _cpu?: CPU;
-  _memory?: Memory;
-  _keyboard?: Keyboard;
-  io?: IO;
-  _display?: Display;
-  _timer?: TimerI8253;
-  _ay?: SoundAY8910;
-  _ayWrapper?: AYWrapper;
-  _fdc?: Fdc1793;
-  _audio?: Audio;
-
-  // Optional callback invoked after each instruction is executed.
-  // The callback is called from the hardware execution thread.
-  debugInstructionCallback?: ((hw: Hardware) => void) | null = null;
+  private _cpu?: CPU;
+  private _memory?: Memory;
+  private _keyboard?: Keyboard;
+  private _io?: IO;
+  private _display?: Display;
+  private _timer?: TimerI8253;
+  private _ay?: SoundAY8910;
+  private _ayWrapper?: AYWrapper;
+  private _fdc?: Fdc1793;
+  private _audio?: Audio;
 
   Debug?: DebugFunc | null = null;
   DebugReqHandling?: DebugReqHandlingFunc | null = null;
 
   debugAttached: boolean = false;
+  result: type.EmulatorResult = new type.EmulatorResult();
 
   constructor(
-    pathBootData: string,
-    ramDiskDataPath: string,
-    ramDiskClearAfterRestart: boolean,
-    fddDataPath: string)
+    bootRom: Uint8Array | undefined,
+    ramDisk: Uint8Array | undefined,
+    ramDiskClearAfterRestart: boolean,)
   {
-    this._memory = new Memory(
-      pathBootData, ramDiskDataPath, ramDiskClearAfterRestart);
+    this._memory = new Memory(bootRom, ramDisk, ramDiskClearAfterRestart);
+    this.result.add(this._memory.result);
+
     this._keyboard = new Keyboard();
     this._timer = new TimerI8253();
     this._ay = new SoundAY8910();
     this._ayWrapper = new AYWrapper(this._ay);
     this._audio = new Audio(this._timer, this._ayWrapper);
-    this._fdc = new Fdc1793(fddDataPath);
-    this.io = new IO(this._keyboard, this._memory, this._timer, this._ay, this._fdc);
+    this._fdc = new Fdc1793();
+    this._io = new IO(this._keyboard, this._memory, this._timer, this._ay, this._fdc);
     this._cpu = new CPU(
-      this._memory, this.io.PortIn.bind(this.io), this.io.PortOut.bind(this.io));
-    this._display = new Display(this._memory, this.io);
+      this._memory, this._io.PortIn.bind(this._io), this._io.PortOut.bind(this._io));
+    this._display = new Display(this._memory, this._io);
 
-
-    this.Init();
+    this.Reset();
   }
 
+  // Extension thread
   Destructor()
   {
-    // Save RAM disk data before destruction
-    this._memory?.SaveRamDiskData();
-    // Save FDD data before destruction
-    this._fdc?.SaveFddData();
+    this.ReqHandling(HardwareReq.STOP);
     this.ReqHandling(HardwareReq.EXIT);
-  }
-
-  setRamDiskPersistence(path: string, clearAfterRestart: boolean) {
-    this._memory?.setRamDiskPersistence(path, clearAfterRestart);
-  }
-
-  // when HW needs Reset
-  Init()
-  {
-    this._memory?.Init();
-    this._display?.Init();
-    this.io?.Init();
   }
 
   // Returns true if the execution breaks
   ExecuteInstruction(): boolean
   {
     // mem debug init
-    //this._memory?.DebugInit();
+    this._memory?.state.debug.Init();
 
     do
     {
       this._display?.Rasterize();
       this._cpu?.ExecuteMachineCycle(this._display?.IsIRQ() ?? false);
-      this._audio?.Clock(2, this.io?.GetBeeper() ?? 0);
+      this._audio?.Clock(2, this._io?.GetBeeper() ?? 0);
 
     } while (!this._cpu?.IsInstructionExecuted());
 
-    // invoke per-instruction debug callback (if attached)
-    try {
-      if (this.debugInstructionCallback) {
-        this.debugInstructionCallback(this);
-      }
-    } catch (e) {
-      console.error('debugInstructionCallback error', e);
-    }
-
     // debug per instruction
     try {
-      if (this.debugAttached && this.Debug && this._cpu && this._memory /*&& this.io && this._display*/)
+      if (this.debugAttached && this.Debug && this._cpu && this._memory && this._io && this._display)
       {
-          const break_ = this.Debug(this._cpu.state, this._memory.state /*, this.io.state, this._display.state*/);
+          const break_ = this.Debug(this._cpu.state, this._memory.state, this._io.state, this._display.state);
           if (break_) return true;
       }
     } catch (e) {
         console.error('Debug per instruction error', e);
+        return true;
     }
 
     if (this._memory?.IsException())
@@ -161,6 +135,7 @@ export class Hardware
   {
 
     let out: ReqData = {};
+    if (!this._cpu || !this._memory || !this._io || !this._display) return out;
 
     switch (req)
     {
@@ -212,35 +187,35 @@ export class Hardware
     case HardwareReq.GET_REGS:
       out = this.GetRegs();
       break;
-
+*/
     case HardwareReq.GET_REG_PC:
-      out = {"pc": this._cpu?.GetPC() };
+      out = {"pc": this._cpu?.pc };
       break;
-
+/*
     case HardwareReq.GET_RUSLAT_HISTORY:
-      out = {"data": this.io?.GetRusLatHistory()};
+      out = {"data": this._io?.GetRusLatHistory()};
       break;
 
     case HardwareReq.GET_IO_PALETTE:
     {
-      out = {"data": this.io?.GetPalette()};;
+      out = {"data": this._io?.GetPalette()};;
       break;
     }
     case HardwareReq.GET_IO_PORTS:
     {
-      out = {"data": this.io?.GetPorts()};
+      out = {"data": this._io?.GetPorts()};
       break;
     }
 
     case HardwareReq.GET_IO_PALETTE_COMMIT_TIME:
     {
-      out = {"paletteCommitTime": this.io?.GetPaletteCommitTime()};
+      out = {"paletteCommitTime": this._io?.GetPaletteCommitTime()};
       break;
     }
 
     case HardwareReq.SET_IO_PALETTE_COMMIT_TIME:
     {
-      this.io?.SetPaletteCommitTime(dataJ["paletteCommitTime"]);
+      this._io?.SetPaletteCommitTime(dataJ["paletteCommitTime"]);
       break;
     }
 
@@ -271,17 +246,35 @@ export class Hardware
     }
 
     case HardwareReq.GET_IO_DISPLAY_MODE:
-      out = {"data": this.io?.GetDisplayMode()};
+      out = {"data": this._io?.GetDisplayMode()};
       break;
 
     case HardwareReq.GET_BYTE_GLOBAL:
       out = this.GetByteGlobal(dataJ);
       break;
-
-    case HardwareReq.GET_BYTE_RAM:
-      out = this.GetByte(dataJ, AddrSpace.RAM);
+    */
+    case HardwareReq.GET_BYTE_RAM:{
+      const byte = this._memory.GetByte(data["addr"], AddrSpace.RAM);
+      out = {"data": byte};
+      break;
+    }
+    case HardwareReq.GET_CPU_STATE:
+      out = {"data": this._cpu?.state.clone() || new CpuState()};
       break;
 
+    case HardwareReq.GET_INSTR:{
+      const addr: number = data["addr"] as number;
+      const opcode: number = this._memory.GetByte(addr, AddrSpace.RAM);
+      const instr_len = CPU.GetInstrLen(opcode);
+      const bytes: number[] = [opcode];
+      if (instr_len > 1)
+        bytes.push(this._memory.GetByte(addr + 1, AddrSpace.RAM));
+      if (instr_len > 2)
+        bytes.push(this._memory.GetByte(addr + 2, AddrSpace.RAM));
+      out = {"data": bytes};
+      break;
+    }
+    /*
     case HardwareReq.GET_THREE_BYTES_RAM:
       out = this.Get3Bytes(dataJ, AddrSpace.RAM);
       break;
@@ -289,43 +282,50 @@ export class Hardware
     case HardwareReq.GET_MEM_STRING_GLOBAL:
       out = this.GetMemString(dataJ);
       break;
-
+*/
     case HardwareReq.GET_WORD_STACK:
-      out = this.GetWord(dataJ, AddrSpace.STACK);
+      out = this.GetWord(data, AddrSpace.STACK);
       break;
 
     case HardwareReq.GET_STACK_SAMPLE:
-      out = this.GetStackSample(dataJ);
+      out = this.GetStackSample(data);
       break;
 
     case HardwareReq.GET_DISPLAY_DATA:
-      out = {"rasterLine": this._display?.GetRasterLine(),
-        "rasterPixel": this._display?.GetRasterPixel(),
-        "frameNum": this._display?.GetFrameNum(),
-        };
+      out = {
+        "rasterLine": this._display?.rasterLine,
+        "rasterPixel": this._display?.rasterPixel,
+        "frameNum": this._display?.frameNum,
+        "scrollIdx": this._display?.scrollIdx
+      };
+      break;
+
+    case HardwareReq.GET_FRAME:
+      const sync = data["vsync"] || false;
+      out = {"data": this._display.GetFrame(sync)};
       break;
 
     case HardwareReq.GET_MEMORY_MAPPING:
+      const idx = this._memory.state.update.ramdiskIdx;
       out = {
-        {"mapping", this._memory.GetState().update.mapping.data},
-        {"ramdiskIdx", this._memory.GetState().update.ramdiskIdx},
+        "mapping": this._memory.state.update.mappings[idx].clone(),
+        "ramdiskIdx": idx,
         };
       break;
 
     case HardwareReq.GET_MEMORY_MAPPINGS:{
-      auto mappingsP = this._memory.GetMappingsP();
-      out = {{"ramdiskIdx", this._memory.GetState().update.ramdiskIdx}};
-      for (auto i=0; i < Memory::RAM_DISK_MAX; i++) {
-        out["mapping"+std::to_string(i)] = mappingsP[i].data;
-      }
-      break;
-    }
-    case HardwareReq.GET_GLOBAL_ADDR_RAM:
+      const idx = this._memory.state.update.ramdiskIdx;
       out = {
-        {"data", this._memory.GetGlobalAddr(dataJ["addr"], AddrSpace.RAM)}
+        "mappings": this._memory.state.update.mappings.map(m => m.clone()),
+        "ramdiskIdx": idx,
         };
       break;
+    }
 
+    case HardwareReq.GET_GLOBAL_ADDR_RAM:
+      out = {"data": this._memory.GetGlobalAddr(data["addr"], AddrSpace.RAM)};
+      break;
+/*
     case HardwareReq.GET_FDC_INFO: {
       auto info = this.fdc.GetFdcInfo();
       out = {
@@ -397,7 +397,11 @@ export class Hardware
     }
 */
     case HardwareReq.SET_MEM:
-      this._memory?.SetRam(data["addr"], data["data"]);
+      this._memory.SetRam(data["addr"], data["data"]);
+      break;
+
+    case HardwareReq.SET_RAM_DISK:
+      this._memory.SetRam(MEMORY_MAIN_LEN, data["data"]);
       break;
 /*
     case HardwareReq.SET_BYTE_GLOBAL:
@@ -414,54 +418,88 @@ export class Hardware
       break;
     }
 
-    case HardwareReq.GET_HW_MAIN_STATS:
-    {
-      auto paletteP = m_io.GetPalette();
+    */
+    case HardwareReq.GET_RAM_DISK:
+      out = {"data": this._memory.ram.subarray(MEMORY_MAIN_LEN, MEMORY_GLOBAL_LEN)};
+      break;
 
-      out = {{"cc", m_cpu.GetCC()},
-        {"rasterLine", m_display.GetRasterLine()},
-        {"rasterPixel", m_display.GetRasterPixel()},
-        {"frameCc", (m_display.GetRasterPixel() + m_display.GetRasterLine() * Display::FRAME_W) / 4},
-        {"frameNum", m_display.GetFrameNum()},
-        {"displayMode", m_io.GetDisplayMode()},
-        {"scrollVert", m_display.GetScrollVert()},
-        {"rusLat", (m_io.GetRusLatHistory() & 0b1000) != 0},
-        {"inte", m_cpu.GetState().ints.inte},
-        {"iff", m_cpu.GetState().ints.iff},
-        {"hlta", m_cpu.GetState().ints.hlta},
-        };
-        for (int i=0; i < IO::PALETTE_LEN; i++ ){
-          out["palette"+std::to_string(i)] = Display::VectorColorToArgb(paletteP->bytes[i]);
-        }
+    case HardwareReq.GET_MEM_DEBUG_STATE:
+      out = {"data": this._memory.state.debug.clone()};
+      break;
+
+    case HardwareReq.GET_MEM_RANGE:{
+      let addr = data["addr"];
+      let length = Math.max(0, data["length"]);
+      addr = Math.min(Math.max(0, addr), MEMORY_GLOBAL_LEN - 1);
+      const endAddr = Math.min(addr + length, MEMORY_GLOBAL_LEN);
+      out = {"data": this._memory.ram.subarray(addr, endAddr)};
       break;
     }
+    case HardwareReq.GET_HW_MAIN_STATS:
+    {
+      if (this._cpu && this._display && this._io) {
+        const hl = this._cpu.state.regs.hl.word;
+        out = {
+          "cpu_state": this._cpu.state.clone(),
+          "rasterLine": this._display.rasterLine,
+          "rasterPixel": this._display.rasterPixel,
+          "frameCc": (this._display.rasterPixel + this._display.rasterLine * FRAME_W) >> 2,
+          "frameNum": this._display.frameNum,
+          "displayMode": this._io.displayMode,
+          "scrollIdx": this._display.scrollIdx,
+          "rusLat": this._io.ruslat,
+          "inte": this._cpu.state.ints.inte,
+          "iff": this._cpu.state.ints.iff,
+          "hlta": this._cpu.state.ints.hlta,
+          "palette": this._io.palette.slice(),
+          "m": this._memory?.GetByte(hl, AddrSpace.RAM) || 0,
+        };
+      }
+      break;
+    }
+    /*
     case HardwareReq.IS_MEMROM_ENABLED:
       out = {
         {"data", m_memory.IsRomEnabled() },
         };
       break;
-
+*/
     case HardwareReq.KEY_HANDLING:
     {
-      auto op = m_io.GetKeyboard().KeyHandling(
-        dataJ["scancode"], dataJ["action"]);
+      const code = data["scancode"];
+      const action = data["action"];
 
-      if (op == Keyboard::Operation::RESET) {
-        Reset();
+      const op = this._keyboard?.KeyHandling(code, action) ?? KbOperation.NONE;
+
+      if (op == KbOperation.RESET) {
+        this.Reset();
       }
-      else if (op == Keyboard::Operation::RESTART) {
-        Restart();
+      else if (op == KbOperation.RESTART) {
+        this.Restart();
       }
       break;
     }
+    /*
     case HardwareReq.GET_SCROLL_VERT:
       out = {
         {"scrollVert", m_display.GetScrollVert()}
         };
       break;
 */
-    case HardwareReq.LOAD_FDD:
-      this._fdc?.Mount(data["driveIdx"], data["data"], data["path"]);
+    case HardwareReq.MOUNT_FDD:{
+      const driveIdx = data["fddIdx"] || undefined;
+      const path = data["path"] || undefined;
+      const disk_data = data["data"] || undefined;
+      if (!disk_data || !path || !driveIdx) {
+        break;
+      }
+      const old_img = this._fdc?.Mount({fddIdx: driveIdx, data: disk_data, path: path});
+      out = {"data": old_img};
+      break;
+    }
+    case HardwareReq.DISMOUNT_FDD_ALL:
+      const old_imgs = this._fdc?.DismountAll() || [];
+      out = {"data": old_imgs};
       break;
 
     case HardwareReq.RESET_UPDATE_FDD:
@@ -473,8 +511,8 @@ export class Hardware
       break;
 
     default:
-      if (this.DebugReqHandling && this._cpu && this._memory /*&& this.io && this._display*/){
-        out = this.DebugReqHandling(req, data, this._cpu.state, this._memory.state/*, this.io.state, this.display.state*/);
+      if (this.DebugReqHandling && this._cpu && this._memory && this._io && this._display){
+        out = this.DebugReqHandling(req, data, this._cpu.state, this._memory.state, this._io.state, this._display.state);
       }
       break;
     }
@@ -482,13 +520,17 @@ export class Hardware
     return out;
   }
 
+  // HW reset (BLK + VVOD keys)
   Reset()
   {
-    this.Init();
+    this._memory?.Reset();
+    this._display?.Reset();
+    this._io?.Reset();
     this._cpu?.Reset();
     this._audio?.Reset();
   }
 
+  // HW restart (BLK + SBR keys)
   Restart()
   {
     this._cpu?.Reset();
@@ -509,24 +551,6 @@ export class Hardware
     this._audio?.Pause(false);
   }
 /*
-  GetRegs() const
-  -> nlohmann::json
-  {
-    auto& cpuState = m_cpu.GetState();
-    nlohmann::json out {
-      {"cc", cpuState.cc },
-      {"pc", cpuState.regs.pc.word },
-      {"sp", cpuState.regs.sp.word },
-      {"af", cpuState.regs.psw.af.word },
-      {"bc", cpuState.regs.bc.word },
-      {"de", cpuState.regs.de.word },
-      {"hl", cpuState.regs.hl.word },
-      {"ints", cpuState.ints.data },
-      {"m", m_memory.GetByte(cpuState.regs.hl.word, AddrSpace.RAM)}
-    };
-    return out;
-  }
-
   GetByteGlobal(const nlohmann::json _globalAddrJ)
   -> nlohmann::json
   {
@@ -534,15 +558,6 @@ export class Hardware
     uint8_t val = m_memory.GetRam()->at(globalAddr);
     nlohmann::json out = {
       {"data", val}
-    };
-    return out;
-  }
-
-  GetByte(addrJ: ReqData, addrSpace: AddrSpace) ReqData
-  {
-    const addr = addrJ["addr"];
-    const out = {
-      "data": m_memory.GetByte(addr, addrSpace)
     };
     return out;
   }
@@ -620,65 +635,43 @@ export class Hardware
     };
     return out;
   }
+*/
 
-  GetWord(const nlohmann::json _addrJ, const Memory::AddrSpace _addrSpace)
-  -> nlohmann::json
+  GetWord(dataIn: ReqData, addrSpace: AddrSpace)
+  : ReqData
   {
-    Addr addr = _addrJ["addr"];
-    auto data = m_memory.GetByte(addr + 1, _addrSpace) << 8 | m_memory.GetByte(addr, _addrSpace);
+    const addr: number = dataIn["addr"];
+    const l = this._memory?.GetByte(addr, addrSpace) ?? 0;
+    const h = this._memory?.GetByte(addr + 1, addrSpace) ?? 0;
+    const data: number = h << 8 | l;
 
-    nlohmann::json out = {
-      {"data", data}
-    };
+    const out = {"data": data};
     return out;
   }
 
-  GetStackSample(const nlohmann::json _addrJ)
-  -> nlohmann::json
+  GetStackSample(dataIn: ReqData)
+  : ReqData
   {
-    Addr addr = _addrJ["addr"];
-    auto dataN10 = m_memory.GetByte(addr - 9, AddrSpace.STACK) << 8 | m_memory.GetByte(addr - 10, AddrSpace.STACK);
-    auto dataN8 = m_memory.GetByte(addr - 7, AddrSpace.STACK) << 8 | m_memory.GetByte(addr - 8, AddrSpace.STACK);
-    auto dataN6 = m_memory.GetByte(addr - 5, AddrSpace.STACK) << 8 | m_memory.GetByte(addr - 6, AddrSpace.STACK);
-    auto dataN4 = m_memory.GetByte(addr - 3, AddrSpace.STACK) << 8 | m_memory.GetByte(addr - 4, AddrSpace.STACK);
-    auto dataN2 = m_memory.GetByte(addr - 1, AddrSpace.STACK) << 8 | m_memory.GetByte(addr - 2, AddrSpace.STACK);
-    auto data = m_memory.GetByte(addr + 1, AddrSpace.STACK) << 8 | m_memory.GetByte(addr, AddrSpace.STACK);
-    auto dataP2 = m_memory.GetByte(addr + 3, AddrSpace.STACK) << 8 | m_memory.GetByte(addr + 2, AddrSpace.STACK);
-    auto dataP4 = m_memory.GetByte(addr + 5, AddrSpace.STACK) << 8 | m_memory.GetByte(addr + 4, AddrSpace.STACK);
-    auto dataP6 = m_memory.GetByte(addr + 7, AddrSpace.STACK) << 8 | m_memory.GetByte(addr + 6, AddrSpace.STACK);
-    auto dataP8 = m_memory.GetByte(addr + 9, AddrSpace.STACK) << 8 | m_memory.GetByte(addr + 8, AddrSpace.STACK);
-    auto dataP10 = m_memory.GetByte(addr + 11, AddrSpace.STACK) << 8 | m_memory.GetByte(addr + 10, AddrSpace.STACK);
+    const addr: number = dataIn["addr"];
+    let stack_sample: number[] = [];
 
-    nlohmann::json out = {
-      {"-10", dataN10},
-      {"-8", dataN8},
-      {"-6", dataN6},
-      {"-4", dataN4},
-      {"-2", dataN2},
-      {"0", data},
-      {"2", dataP2},
-      {"4", dataP4},
-      {"6", dataP6},
-      {"8", dataP8},
-      {"10", dataP10},
-    };
-    return out;
+    for (let offset of [-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10])
+    {
+      const l = this._memory?.GetByte(addr + offset, AddrSpace.STACK) ?? 0;
+      const h = this._memory?.GetByte(addr + offset + 1, AddrSpace.STACK) ?? 0;
+      const data: number = h << 8 | l;
+      stack_sample.push(data);
+    }
+    return {"data": stack_sample};
   }
-
+/*
   GetRam() const
   -> const Memory::Ram*
   {
     return m_memory.GetRam();
   }
-
-  // UI thread. Non-blocking reading.
-  GetFrame(const bool _vsync)
-  ->const Display::FrameBuffer*
-  {
-    return m_display.GetFrame(_vsync);
-  }
-
 */
+
   ExecuteFrame(breaks: boolean = false)
   {
     const frameNum: number = this._display?.frameNum ?? 0;
@@ -742,9 +735,4 @@ export class Hardware
     this.Debug = debugFunc;
     this.DebugReqHandling = debugReqHandlingFunc;
   }
-
-  get display(): Display | undefined { return this._display; }
-  get memory(): Memory | undefined { return this._memory; }
-  get cpu(): CPU | undefined { return this._cpu; }
-  get keyboard(): Keyboard | undefined { return this._keyboard; }
 }

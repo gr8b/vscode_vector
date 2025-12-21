@@ -24,10 +24,10 @@ export class Keyboard
   KeyHandling(code: string, action: string): KbOperation
   {
     switch (code) {
-      case 'F11': // BLK + VVOD functionality
+      case 'F11': // BLK + VVOD (Reset) functionality
         if (action === 'up') return KbOperation.RESET;
         break;
-      case 'F12': // BLK + SBR functionality
+      case 'F12': // BLK + SBR (Restart) functionality
         if (action === 'up') return KbOperation.RESTART;
         break;
       case 'ShiftLeft': // SS (shift) key

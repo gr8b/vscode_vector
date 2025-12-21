@@ -1,11 +1,11 @@
 {
     "name": "prg",
-    "main": "prg_main.asm",
-    "rom": "./out/game.rom",
-    "fdd": "./out/GJ.fdd",
+    "asmPath": "prg_main.asm",
+    "debugPath": "prg.debug.json",
+    "romPath": "prg.rom",
     "settings": {
         "speed": "max",
         "viewMode": "noBorder",
-        "ramDiskDataPath": "prg.ramdisk.bin"
+        "ramDiskPath": "out\\prg.ram_disk.bin"
     }
 }

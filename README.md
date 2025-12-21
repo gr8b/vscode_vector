@@ -92,7 +92,7 @@ npm run compile
 node .\scripts\run-assembler.js
 ```
 
-- Compile the active `test/project/*.project.json` configuration from VS Code via the **"Compile i8080 Project"** command. The command locates the project JSON inside `test/project`, reads its `main` ASM entry, and assembles it using the same pipeline as the standard `Compile i8080 Assembly` command.
+- Compile the active `test/project/*.project.json` configuration from VS Code via the **"Compile Vector06c Project"** command. The command locates the project JSON inside the root of `workspace`, reads its `main` ASM entry, and assembles it.
 - Project builds emit `<project-name>.rom` (and the matching `<project-name>.debug.json` tokens file) beside the `.project.json`, so the name field controls the output artifact names.
 - Adding or removing a breakpoint inside any `.asm` file automatically reruns the project compile so the ROM and breakpoint metadata stay in sync.
 
@@ -127,7 +127,7 @@ You can configure your project using a `.project.json` file. This file defines t
     "fdd": "./out/game.fdd",
     "settings": {
         "speed": "max",
-        "fddDataPath": "./out/game_saved.fdd"
+        "fddPath": "./out/game_saved.fdd"
     }
 }
 ```
@@ -147,16 +147,16 @@ You can configure your project using a `.project.json` file. This file defines t
   - Default: `1` (normal speed).
   - This setting is automatically updated when you change the speed in the emulator panel, persisting your preference across sessions.
 
-- **fddDataPath**: (Optional) Path to save FDD disk data for persistence across emulator restarts.
+- **fddPath**: (Optional) Path to save FDD disk data for persistence across emulator restarts.
   - When set, any writes to the FDD (floppy disk) during emulation are automatically saved to this file when the emulator closes.
   - On the next run, if this saved file exists, it will be loaded instead of the original FDD file specified in the `fdd` field.
-  - Example: `"fddDataPath": "./out/saved_disk.fdd"`
+  - Example: `"fddPath": "./out/saved_disk.fdd"`
   - If not set, FDD changes are lost on each emulator restart.
   - This allows you to preserve game saves, high scores, and other data written to the floppy disk.
 
-- **ramDiskDataPath**: (Optional) Path to save RAM disk data for persistence across emulator restarts.
+- **ramDiskData**: (Optional) Path to save RAM disk data for persistence across emulator restarts.
   - When set, RAM disk contents are automatically saved to this file when the emulator closes and loaded on startup.
-  - Example: `"ramDiskDataPath": "./out/ramdisk.bin"`
+  - Example: `"ramDiskData": "./out/ramdisk.bin"`
 
 ## VS Code editor helpers
 
@@ -315,8 +315,8 @@ Expressions can reference:
 
 - Origins mapping: when using `.include`, the assembler records the original file and line for each expanded line. Errors and warnings reference the original filename and line number and print the offending source line plus a `file:///` link.
 
-- Tokens file: the assembler writes a JSON alongside the ROM (e.g., `test.json`) containing `labels` with addresses (hex), and the original `src` basename and `line` where each label was defined. This is useful for setting breakpoints by name in the emulator/debugger.
-  - Note: When compiling through the VS Code extension `i8080.compile` command, the extension also appends a `breakpoints` section to the tokens JSON that records per-file breakpoints (line numbers, enabled status, and label/addr where available) discovered in the editor across the main file and recursive includes.
+- Tokens file: the assembler writes a debug JSON alongside the ROM (e.g., `myproject.debug.json`) containing `labels` with addresses (hex), and the original `src` basename and `line` where each label was defined. This is useful for setting breakpoints by name in the emulator/debugger.
+  - Note: When compiling through the VS Code extension `devector.compileProject` command, the extension also appends a `breakpoints` section to the tokens JSON that records per-file breakpoints (line numbers, enabled status, and label/addr where available) discovered in the editor across the main file and recursive includes.
   - Breakpoints can be toggled only on meaningful lines (labels or instructions). Empty lines, pure comment lines, or lines containing compiler commands `.<cmd>` are ignored when you click the gutter or press `F9`.
 
 - Warnings for immediates/addresses: if an immediate or address exceeds the instruction width (8-bit or 16-bit), the assembler emits a warning and truncates the value to the appropriate width. These are currently non-fatal warnings.

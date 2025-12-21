@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { Hardware } from '../emulator/hardware';
-import Memory from '../emulator/memory';
+import Memory, { AddrSpace } from '../emulator/memory';
 import { parseAddressLike } from './utils';
+import { HardwareReq } from '../emulator/hardware_reqs';
 
 const MEMORY_ADDRESS_MASK = 0xffff;
 const MEMORY_DUMP_LINE_BYTES = 16;
@@ -23,18 +24,6 @@ function alignMemoryDumpBase(value: number): number {
   return normalized & ~(MEMORY_DUMP_LINE_BYTES - 1);
 }
 
-function readMemoryChunk(memory: Memory, baseAddr: number): number[] {
-  const bytes: number[] = [];
-  for (let i = 0; i < MEMORY_DUMP_TOTAL_BYTES; i++) {
-    const addr = (baseAddr + i) & MEMORY_ADDRESS_MASK;
-    try {
-      bytes.push(memory.GetByteGlobal(addr) & 0xff);
-    } catch (e) {
-      bytes.push(0);
-    }
-  }
-  return bytes;
-}
 
 export function resetMemoryDumpState(): void {
   memoryDumpFollowPc = true;
@@ -46,31 +35,56 @@ export function updateMemoryDumpFromHardware(
   panel: vscode.WebviewPanel | null,
   hardware: Hardware | undefined | null,
   reason: 'pc' | 'user' = 'pc',
-  explicitBase?: number
-) {
-  if (!panel || !hardware || !hardware.memory) return;
+  explicitBase?: number)
+{
+  if (!panel || !hardware) return;
   let nextBase = memoryDumpStartAddr;
   let anchor = memoryDumpAnchorAddr;
-  if (reason === 'pc' && memoryDumpFollowPc) {
-    const pc = hardware.cpu?.state?.regs.pc.word;
+
+  const cpuState = hardware.Request(HardwareReq.GET_CPU_STATE)["data"];
+
+  if (reason === 'pc' && memoryDumpFollowPc)
+  {
+    const pc = cpuState.regs.pc.word;
     if (pc !== undefined) {
       anchor = pc;
       nextBase = pc;
     }
-  } else if (explicitBase !== undefined) {
+  }
+  else if (explicitBase !== undefined)
+  {
     anchor = explicitBase;
     nextBase = explicitBase;
   }
+
   memoryDumpAnchorAddr = normalizeMemoryAddress(anchor);
   memoryDumpStartAddr = alignMemoryDumpBase(nextBase);
-  const bytes = readMemoryChunk(hardware.memory, memoryDumpStartAddr);
-  const pc = hardware.cpu?.state?.regs.pc.word ?? 0;
+
+  let bytes: Uint8Array | undefined = undefined;
+
+  const addrSpace: AddrSpace = AddrSpace.GLOBAL;
+  switch (addrSpace) {
+    case AddrSpace.GLOBAL:
+      bytes = hardware.Request(
+        HardwareReq.GET_MEM_RANGE, { "addr": memoryDumpStartAddr, "len": MEMORY_DUMP_TOTAL_BYTES })["data"] ?? [];
+      break;
+    // case AddrSpace.RAM:
+    //   // TODO: implement RAM space dump
+    //   break;
+    // case AddrSpace.STACK:
+    //   // TODO: implement STACK space dump
+    //   break;
+    default:
+      bytes = new Uint8Array(MEMORY_DUMP_TOTAL_BYTES);
+      break;
+  }
+
   try {
     panel.webview.postMessage({
       type: 'memoryDump',
       startAddr: memoryDumpStartAddr,
       bytes,
-      pc,
+      pc: cpuState.regs.pc.word,
       followPc: memoryDumpFollowPc,
       anchorAddr: memoryDumpAnchorAddr
     });

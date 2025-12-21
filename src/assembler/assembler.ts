@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { AssembleResult, AssembleWriteResult, ExpressionEvalContext, IfFrame, LocalLabelScopeIndex, PrintMessage, SourceOrigin } from './assembler/types';
+import { AssembleResult, AssembleWriteResult, ExpressionEvalContext, IfFrame, LocalLabelScopeIndex, PrintMessage, SourceOrigin } from './types';
 import {
   stripInlineComment,
   splitTopLevelArgs,
@@ -15,10 +15,12 @@ import {
   TextEncodingType,
   TextCaseType,
   parseTextLiteralToBytes
-} from './assembler/utils';
-import { evaluateConditionExpression } from './assembler/expression';
-import { prepareMacros, expandMacroInvocations } from './assembler/macro';
-import { expandLoopDirectives } from './assembler/loops';
+} from './utils';
+
+import { evaluateConditionExpression } from './expression';
+import { prepareMacros, expandMacroInvocations } from './macro';
+import { expandLoopDirectives } from './loops';
+import { DEBUG_FILE_SUFFIX } from '../extention/consts';
 
 export function assemble(source: string, sourcePath?: string): AssembleResult {
   // Expand .include directives and build an origin map so we can report
@@ -1635,11 +1637,26 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     dataSpanOut[idx + 1] = span;
   }
 
-  return { success: true, output: Buffer.from(out), map, labels: labelsOut, consts: constsOut, dataLineSpans: dataSpanOut, warnings, printMessages, origins };
+  return {
+    success: true,
+    output: Buffer.from(out),
+    map,
+    labels: labelsOut,
+    consts: constsOut,
+    dataLineSpans: dataSpanOut,
+    warnings,
+    printMessages,
+    origins };
 }
 
 // convenience when using from extension
-export function assembleAndWrite(source: string, outPath: string, sourcePath?: string, debugPath?: string): AssembleWriteResult {
+export function assembleAndWrite(
+  source: string,
+  outPath: string,
+  sourcePath?: string,
+  debugPath?: string)
+: AssembleWriteResult
+{
   const startTime = Date.now();
   const res = assemble(source, sourcePath);
   if (!res.success || !res.output) {
@@ -1736,14 +1753,14 @@ export function assembleAndWrite(source: string, outPath: string, sourcePath?: s
 
   // write debug file (JSON)
   try {
-  // token file uses a `.debug.json` suffix (e.g. `test.rom` -> `test.debug.json`).
+  // token file uses a DEBUG_FILE_SUFFIX suffix (e.g. `test.rom` -> `test.debug.json`).
   let tokenPath: string;
   if (debugPath) {
     tokenPath = debugPath;
   } else if (/\.[^/.]+$/.test(outPath)) {
-    tokenPath = outPath.replace(/\.[^/.]+$/, '.debug.json');
+    tokenPath = outPath.replace(/\.[^/.]+$/, DEBUG_FILE_SUFFIX);
   } else {
-    tokenPath = outPath + '.debug.json';
+    tokenPath = outPath + DEBUG_FILE_SUFFIX;
   }
     const tokens: any = {
       labels: {},
