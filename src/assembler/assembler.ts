@@ -21,51 +21,36 @@ import { evaluateConditionExpression } from './expression';
 import { prepareMacros, expandMacroInvocations } from './macro';
 import { expandLoopDirectives } from './loops';
 import { DEBUG_FILE_SUFFIX } from '../extention/consts';
+import { processIncludes } from './includes';
+import { registerLabel as registerLabelHelper, getScopeKey } from './labels';
+import { tokenizeLineWithOffsets, argsAfterToken, isDirectiveToken, checkLabelOnDirective } from './common';
+import { handleDB, handleDW, handleDS } from './data';
+import { 
+  handleIfDirective, 
+  handleEndifDirective, 
+  handlePrintDirective, 
+  handleErrorDirective,
+  handleEncodingDirective,
+  handleTextDirective,
+  DirectiveContext 
+} from './directives';
+import {
+  formatSignedHex,
+  ensureImmediateRange,
+  resolveAddressToken as resolveAddressTokenInstr,
+  encodeMVI,
+  encodeMOV,
+  encodeLXI,
+  encodeThreeByteAddress,
+  encodeImmediateOp,
+  encodeRegisterOp,
+  InstructionContext
+} from './instructions';
 
 export function assemble(source: string, sourcePath?: string): AssembleResult {
-  // Expand .include directives and build an origin map so we can report
-  // errors/warnings that reference the original file and line number.
-  function processContent(content: string, file?: string, depth = 0): { lines: string[]; origins: SourceOrigin[] } {
-    if (depth > 16) throw new Error(`Include recursion too deep (>${16}) when processing ${file || '<memory>'}`);
-    const outLines: string[] = [];
-    const origins: Array<{ file?: string; line: number }> = [];
-    const srcLines = content.split(/\r?\n/);
-    for (let li = 0; li < srcLines.length; li++) {
-      const raw = srcLines[li];
-      const trimmed = raw.replace(/\/\/.*$|;.*$/, '').trim();
-      // match .include "filename" or .include 'filename'
-      const m = trimmed.match(/^\.include\s+["']([^"']+)["']/i);
-      if (m) {
-        const inc = m[1];
-        // resolve path
-        let incPath = inc;
-        if (!path.isAbsolute(incPath)) {
-          const baseDir = file ? path.dirname(file) : (sourcePath ? path.dirname(sourcePath) : process.cwd());
-          incPath = path.resolve(baseDir, incPath);
-        }
-        let incText: string;
-        try {
-          incText = fs.readFileSync(incPath, 'utf8');
-        } catch (err) {
-          const em = err && (err as any).message ? (err as any).message : String(err);
-          throw new Error(`Failed to include '${inc}' at ${file || sourcePath || '<memory>'}:${li+1} - ${em}`);
-        }
-        const nested = processContent(incText, incPath, depth + 1);
-        for (let k = 0; k < nested.lines.length; k++) {
-          outLines.push(nested.lines[k]);
-          origins.push(nested.origins[k]);
-        }
-        continue;
-      }
-      outLines.push(raw);
-      origins.push({ file: file || sourcePath, line: li + 1 });
-    }
-    return { lines: outLines, origins };
-  }
-
   let expanded: { lines: string[]; origins: SourceOrigin[] };
   try {
-    expanded = processContent(source, sourcePath, 0);
+    expanded = processIncludes(source, sourcePath, sourcePath, 0);
   } catch (err: any) {
     return { success: false, errors: [err.message] };
   }
@@ -92,14 +77,6 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
   const scopes: string[] = new Array(lines.length);
   const alignDirectives: Array<{ value: number }> = new Array(lines.length);
   let directiveCounter = 0;
-  function getFileKey(orig?: SourceOrigin) {
-    return (orig && orig.file) ? path.resolve(orig.file) : (sourcePath ? path.resolve(sourcePath) : '<memory>');
-  }
-  function getScopeKey(orig?: SourceOrigin) {
-    let key = getFileKey(orig) + '::' + directiveCounter;
-    if (orig?.macroScope) key += `::${orig.macroScope}`;
-    return key;
-  }
 
   let addr = 0;
   const errors: string[] = [];
@@ -113,62 +90,13 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
   let textEncoding: TextEncodingType = 'ascii';
   let textCase: TextCaseType = 'mixed';
 
+  // Helper to register a label using the imported function
   function registerLabel(name: string, address: number, origin: SourceOrigin | undefined, fallbackLine: number, scopeKey: string) {
-    if (!name) return;
-    const srcName = origin && origin.file ? path.basename(origin.file) : (sourcePath ? path.basename(sourcePath) : undefined);
-    if (name[0] === '@') {
-      const localName = name.slice(1);
-      let fileMap = localsIndex.get(scopeKey);
-      if (!fileMap) {
-        fileMap = new Map();
-        localsIndex.set(scopeKey, fileMap);
-      }
-      let arr = fileMap.get(localName);
-      if (!arr) {
-        arr = [];
-        fileMap.set(localName, arr);
-      }
-      const gid = globalLocalCounters.get(localName) || 0;
-      globalLocalCounters.set(localName, gid + 1);
-      const key = '@' + localName + '_' + gid;
-      arr.push({ key, line: origin ? origin.line : fallbackLine });
-      labels.set(key, { addr: address, line: origin ? origin.line : fallbackLine, src: srcName });
-    } else {
-      if (labels.has(name)) {
-        const prev = labels.get(name)!;
-        errors.push(`Duplicate label '${name}' at ${fallbackLine} (previously at ${prev.line})`);
-      } else {
-        labels.set(name, { addr: address, line: origin ? origin.line : fallbackLine, src: srcName });
-      }
-    }
+    registerLabelHelper(name, address, origin, fallbackLine, scopeKey, labels, localsIndex, globalLocalCounters, errors, sourcePath);
   }
 
-  function tokenizeLineWithOffsets(lineText: string): { tokens: string[]; offsets: number[] } {
-    if (!lineText.length) return { tokens: [], offsets: [] };
-    const tokens = lineText.split(/\s+/);
-    const offsets: number[] = [];
-    let cursor = 0;
-    for (const token of tokens) {
-      const idx = lineText.indexOf(token, cursor);
-      const start = idx >= 0 ? idx : cursor;
-      offsets.push(start);
-      cursor = start + token.length;
-    }
-    return { tokens, offsets };
-  }
-
-  function argsAfterToken(lineText: string, token: string | undefined, offset: number | undefined): string {
-    if (!lineText || !token || offset === undefined || offset < 0) return '';
-    return lineText.slice(offset + token.length);
-  }
-
-  // Helper to check if an expression likely contains unary < or > operators
-  // that would require expression evaluation rather than simple parsing
-  function containsLowHighByteOperators(expr: string): boolean {
-    // Simple check for < or > that aren't part of comparison operators
-    // This is a heuristic - the expression parser will handle the actual parsing
-    return expr.includes('<') || expr.includes('>');
-  }
+  // Helper to tokenize with offsets - using imported function
+  const tokenize = tokenizeLineWithOffsets;
 
   // Helper to evaluate an expression with full expression parser support
   // Used for constants and immediate values that may use < or > operators
@@ -186,20 +114,9 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
     }
   }
 
-  function formatSignedHex(value: number): string {
-    const normalized = Math.trunc(value);
-    const prefix = normalized < 0 ? '-0x' : '0x';
-    const hex = Math.abs(normalized).toString(16).toUpperCase();
-    return prefix + hex;
-  }
-
-  function ensureImmediateRange(value: number, bits: 8 | 16, operandLabel: string, opLabel: string, line: number): boolean {
-    const max = bits === 8 ? 0xff : 0xffff;
-    if (value < 0 || value > max) {
-      errors.push(`${operandLabel} (${formatSignedHex(value)}) does not fit in ${bits}-bit operand for ${opLabel} at ${line}`);
-      return false;
-    }
-    return true;
+  // Helper to create scope key
+  function makeScopeKey(orig?: SourceOrigin): string {
+    return getScopeKey(orig, sourcePath, directiveCounter);
   }
 
   // First pass: labels and address calculation
@@ -217,26 +134,23 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         directiveCounter++;
       }
     }
-    scopes[i] = getScopeKey(origins[i]);
+    scopes[i] = makeScopeKey(origins[i]);
     const originDesc = describeOrigin(origins[i], i + 1, sourcePath);
 
-    const labelIfMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.if\b/i);
-    if (labelIfMatch && line[0] !== '.') {
+    // Check for labels on directives that don't allow them
+    if (checkLabelOnDirective(line, 'if')) {
       errors.push(`Labels are not allowed on .if directives at ${originDesc}`);
       continue;
     }
-    const labelEndifMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.endif\b/i);
-    if (labelEndifMatch && line[0] !== '.') {
+    if (checkLabelOnDirective(line, 'endif')) {
       errors.push(`Labels are not allowed on .endif directives at ${originDesc}`);
       continue;
     }
-    const labelPrintMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.print\b/i);
-    if (labelPrintMatch && line[0] !== '.') {
+    if (checkLabelOnDirective(line, 'print')) {
       errors.push(`Labels are not allowed on .print directives at ${originDesc}`);
       continue;
     }
-    const labelErrorMatch = line.match(/^[A-Za-z_@][A-Za-z0-9_@.]*\s*:?\s*\.error\b/i);
-    if (labelErrorMatch && line[0] !== '.') {
+    if (checkLabelOnDirective(line, 'error')) {
       errors.push(`Labels are not allowed on .error directives at ${originDesc}`);
       continue;
     }
@@ -246,43 +160,13 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       continue;
     }
 
-    const endifMatch = line.match(/^\.endif\b(.*)$/i);
-    if (endifMatch) {
-      const remainder = (endifMatch[1] || '').trim();
-      if (remainder.length) errors.push(`Unexpected tokens after .endif at ${originDesc}`);
-      if (!ifStack.length) errors.push(`.endif without matching .if at ${originDesc}`);
-      else ifStack.pop();
+    // Handle .endif directive
+    if (handleEndifDirective(line, origins[i], i + 1, sourcePath, ifStack, { labels, consts, variables, errors, warnings, printMessages, textEncoding, textCase, localsIndex, scopes })) {
       continue;
     }
 
-    const ifMatch = line.match(/^\.if\b(.*)$/i);
-    if (ifMatch) {
-      const expr = (ifMatch[1] || '').trim();
-      const parentActive = ifStack.length === 0 ? true : ifStack[ifStack.length - 1].effective;
-      if (!expr.length) {
-        errors.push(`Missing expression for .if at ${originDesc}`);
-        ifStack.push({ effective: false, suppressed: !parentActive, origin: origins[i], lineIndex: i + 1 });
-        continue;
-      }
-      const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex: i + 1 };
-      let conditionResult = false;
-      if (!parentActive) {
-        try {
-          evaluateConditionExpression(expr, ctx, false);
-        } catch (err: any) {
-          errors.push(`Failed to parse .if expression at ${originDesc}: ${err?.message || err}`);
-        }
-      } else {
-        try {
-          const value = evaluateConditionExpression(expr, ctx, true);
-          conditionResult = value !== 0;
-        } catch (err: any) {
-          errors.push(`Failed to evaluate .if at ${originDesc}: ${err?.message || err}`);
-          conditionResult = false;
-        }
-      }
-      const effective = parentActive && conditionResult;
-      ifStack.push({ effective, suppressed: !parentActive, origin: origins[i], lineIndex: i + 1 });
+    // Handle .if directive
+    if (handleIfDirective(line, origins[i], i + 1, sourcePath, ifStack, { labels, consts, variables, errors, warnings, printMessages, textEncoding, textCase, localsIndex, scopes })) {
       continue;
     }
 
@@ -328,7 +212,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       continue;
     }
 
-    const tokenized = tokenizeLineWithOffsets(line);
+    const tokenized = tokenize(line);
     const tokens = tokenized.tokens;
     const tokenOffsets = tokenized.offsets;
     if (!tokens.length) continue;
@@ -565,7 +449,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       if (num !== null) val = num & 0xffff;
       else if (aTok && aTok[0] === '@') {
         // try to resolve local label in current scope
-        const scopeKey = getScopeKey(org);
+        const scopeKey = makeScopeKey(org);
         const fileMap = localsIndex.get(scopeKey);
         if (fileMap) {
           const arr = fileMap.get(aTok.slice(1));
@@ -584,7 +468,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       directiveCounter++;
       if (pendingDirectiveLabel) {
         const org = origins[i];
-        const newScope = getScopeKey(org);
+        const newScope = makeScopeKey(org);
         const fallbackLine = org && typeof org.line === 'number' ? org.line : (i + 1);
         registerLabel(pendingDirectiveLabel, addr, org, fallbackLine, newScope);
         pendingDirectiveLabel = null;
@@ -1019,7 +903,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
       continue;
     }
 
-    const tokenizedSecond = tokenizeLineWithOffsets(line);
+    const tokenizedSecond = tokenize(line);
     const tokens = tokenizedSecond.tokens;
     const tokenOffsets = tokenizedSecond.offsets;
     if (!tokens.length) continue;
@@ -1236,7 +1120,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         if (resolvedVal !== null) target = resolvedVal;
         else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
       }
-      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine)) continue;
+      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine, errors)) continue;
       const opcode = op === 'LHLD' ? 0x2A : 0x22;
       out.push(opcode & 0xff);
       out.push(target & 0xff);
@@ -1278,7 +1162,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         }
       }
       if (!(r in mviOpcodes) || (full === null)) { errors.push(`Bad MVI operands at ${srcLine}`); continue; }
-      if (!ensureImmediateRange(full, 8, `Immediate ${rawVal}`, 'MVI', srcLine)) continue;
+      if (!ensureImmediateRange(full, 8, `Immediate ${rawVal}`, 'MVI', srcLine, errors)) continue;
       out.push(mviOpcodes[r]);
       out.push((full & 0xff));
       addr += 2;
@@ -1314,7 +1198,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         if (resolvedVal !== null) target = resolvedVal;
         else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
       }
-      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine)) continue;
+      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine, errors)) continue;
       let opcode = 0;
       if (op === 'LDA') opcode = 0x3A;
       if (op === 'STA') opcode = 0x32;
@@ -1360,7 +1244,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         errors.push(`Bad LXI value '${val}' at ${srcLine}`);
         continue;
       }
-      if (!ensureImmediateRange(target, 16, `Immediate ${val}`, 'LXI', srcLine)) continue;
+      if (!ensureImmediateRange(target, 16, `Immediate ${val}`, 'LXI', srcLine, errors)) continue;
       out.push(opcode & 0xff);
       out.push(target & 0xff);
       out.push((target >> 8) & 0xff);
@@ -1439,7 +1323,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         }
       }
       if (full === null) { errors.push(`Bad immediate '${valTok}' at ${srcLine}`); continue; }
-      if (!ensureImmediateRange(full, 8, `Immediate ${valTok}`, op, srcLine)) continue;
+      if (!ensureImmediateRange(full, 8, `Immediate ${valTok}`, op, srcLine, errors)) continue;
       let opcode = 0;
       if (op === 'ADI') opcode = 0xC6;
       if (op === 'ACI') opcode = 0xCE;
@@ -1465,7 +1349,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         }
       }
       if (full === null) { errors.push(`Bad immediate '${valTok}' at ${srcLine}`); continue; }
-      if (!ensureImmediateRange(full, 8, `Immediate ${valTok}`, op, srcLine)) continue;
+      if (!ensureImmediateRange(full, 8, `Immediate ${valTok}`, op, srcLine, errors)) continue;
       let opcode = 0;
       if (op === 'ANI') opcode = 0xE6;
       if (op === 'XRI') opcode = 0xEE;
@@ -1538,7 +1422,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         }
       }
       if (full === null) { errors.push(`Bad IN port '${tok}' at ${srcLine}`); continue; }
-      if (!ensureImmediateRange(full, 8, `IN port ${tok}`, 'IN', srcLine)) continue;
+      if (!ensureImmediateRange(full, 8, `IN port ${tok}`, 'IN', srcLine, errors)) continue;
       out.push(0xDB); out.push(full & 0xff); addr += 2; continue;
     }
     if (op === 'OUT') {
@@ -1555,7 +1439,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         }
       }
       if (full === null) { errors.push(`Bad OUT port '${tok}' at ${srcLine}`); continue; }
-      if (!ensureImmediateRange(full, 8, `OUT port ${tok}`, 'OUT', srcLine)) continue;
+      if (!ensureImmediateRange(full, 8, `OUT port ${tok}`, 'OUT', srcLine, errors)) continue;
       out.push(0xD3); out.push(full & 0xff); addr += 2; continue;
     }
 
@@ -1582,7 +1466,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         if (resolvedVal !== null) target = resolvedVal;
         else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
       }
-      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine)) continue;
+      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine, errors)) continue;
       out.push(jmpMap[op]); out.push(target & 0xff); out.push((target >> 8) & 0xff); addr += 3; continue;
     }
 
@@ -1597,7 +1481,7 @@ export function assemble(source: string, sourcePath?: string): AssembleResult {
         if (resolvedVal !== null) target = resolvedVal;
         else { errors.push(`Unknown label or address '${arg}' at ${srcLine}`); target = 0; }
       }
-      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine)) continue;
+      if (!ensureImmediateRange(target, 16, `Address ${arg}`, op, srcLine, errors)) continue;
       out.push(callMap[op]); out.push(target & 0xff); out.push((target >> 8) & 0xff); addr += 3; continue;
     }
 
