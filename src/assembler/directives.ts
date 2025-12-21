@@ -39,21 +39,21 @@ export function handleIfDirective(
   const expr = (ifMatch[1] || '').trim();
   const originDesc = describeOrigin(origin, lineIndex, sourcePath);
   const parentActive = ifStack.length === 0 ? true : ifStack[ifStack.length - 1].effective;
-  
+
   if (!expr.length) {
     ctx.errors.push(`Missing expression for .if at ${originDesc}`);
     ifStack.push({ effective: false, suppressed: !parentActive, origin, lineIndex });
     return true;
   }
-  
-  const exprCtx: ExpressionEvalContext = { 
-    labels: ctx.labels, 
-    consts: ctx.consts, 
-    localsIndex: ctx.localsIndex, 
-    scopes: ctx.scopes, 
-    lineIndex 
+
+  const exprCtx: ExpressionEvalContext = {
+    labels: ctx.labels,
+    consts: ctx.consts,
+    localsIndex: ctx.localsIndex,
+    scopes: ctx.scopes,
+    lineIndex
   };
-  
+
   let conditionResult = false;
   if (!parentActive) {
     try {
@@ -70,7 +70,7 @@ export function handleIfDirective(
       conditionResult = false;
     }
   }
-  
+
   const effective = parentActive && conditionResult;
   ifStack.push({ effective, suppressed: !parentActive, origin, lineIndex });
   return true;
@@ -89,7 +89,7 @@ export function handleEndifDirective(
 
   const remainder = (endifMatch[1] || '').trim();
   const originDesc = describeOrigin(origin, lineIndex, sourcePath);
-  
+
   if (remainder.length) {
     ctx.errors.push(`Unexpected tokens after .endif at ${originDesc}`);
   }
@@ -98,7 +98,7 @@ export function handleEndifDirective(
   } else {
     ifStack.pop();
   }
-  
+
   return true;
 }
 
@@ -116,19 +116,19 @@ export function handlePrintDirective(
   const argsText = (printMatch[1] || '').trim();
   const parts = argsText.length ? splitTopLevelArgs(argsText) : [];
   const fragments: string[] = [];
-  const exprCtx: ExpressionEvalContext = { 
-    labels: ctx.labels, 
-    consts: ctx.consts, 
-    localsIndex: ctx.localsIndex, 
-    scopes: ctx.scopes, 
-    lineIndex 
+  const exprCtx: ExpressionEvalContext = {
+    labels: ctx.labels,
+    consts: ctx.consts,
+    localsIndex: ctx.localsIndex,
+    scopes: ctx.scopes,
+    lineIndex
   };
-  
+
   let failed = false;
   for (const partRaw of parts) {
     const part = partRaw.trim();
     if (!part.length) continue;
-    
+
     try {
       const literal = parseStringLiteral(part);
       if (literal !== null) {
@@ -140,7 +140,7 @@ export function handlePrintDirective(
       failed = true;
       break;
     }
-    
+
     try {
       const value = evaluateConditionExpression(part, exprCtx, true);
       fragments.push(String(value));
@@ -150,7 +150,7 @@ export function handlePrintDirective(
       break;
     }
   }
-  
+
   if (!failed) {
     const output = fragments.length ? fragments.join(' ') : '';
     ctx.printMessages.push({ text: output, origin, lineIndex });
@@ -160,7 +160,7 @@ export function handlePrintDirective(
       // ignore console output errors
     }
   }
-  
+
   return true;
 }
 
@@ -178,19 +178,19 @@ export function handleErrorDirective(
   const argsText = (errorMatch[1] || '').trim();
   const parts = argsText.length ? splitTopLevelArgs(argsText) : [];
   const fragments: string[] = [];
-  const exprCtx: ExpressionEvalContext = { 
-    labels: ctx.labels, 
-    consts: ctx.consts, 
-    localsIndex: ctx.localsIndex, 
-    scopes: ctx.scopes, 
-    lineIndex 
+  const exprCtx: ExpressionEvalContext = {
+    labels: ctx.labels,
+    consts: ctx.consts,
+    localsIndex: ctx.localsIndex,
+    scopes: ctx.scopes,
+    lineIndex
   };
-  
+
   let failed = false;
   for (const partRaw of parts) {
     const part = partRaw.trim();
     if (!part.length) continue;
-    
+
     try {
       const literal = parseStringLiteral(part);
       if (literal !== null) {
@@ -202,7 +202,7 @@ export function handleErrorDirective(
       failed = true;
       break;
     }
-    
+
     try {
       const value = evaluateConditionExpression(part, exprCtx, true);
       fragments.push(String(value));
@@ -212,12 +212,12 @@ export function handleErrorDirective(
       break;
     }
   }
-  
+
   if (!failed) {
     const errorMessage = fragments.length ? fragments.join(' ') : '';
     ctx.errors.push(`.error: ${errorMessage} at ${originDesc}`);
   }
-  
+
   return true;
 }
 
@@ -228,52 +228,49 @@ export function handleEncodingDirective(
   sourcePath: string | undefined,
   ctx: DirectiveContext,
   tokenOffsets: number[],
-  tokens: string[]
-): boolean {
-  const op = tokens[0].toUpperCase();
-  if (op !== '.ENCODING') return false;
-
+  tokens: string[])
+{
   const originDesc = describeOrigin(origin, lineIndex, sourcePath);
   const rest = argsAfterToken(line, tokens[0], tokenOffsets[0]).trim();
   const args = splitTopLevelArgs(rest);
-  
+
   if (args.length < 1) {
     ctx.errors.push(`Missing encoding type for .encoding at ${originDesc}`);
-    return true;
+    return;
   }
-  
+
   const typeArg = parseStringLiteral(args[0]);
   if (typeArg === null) {
     ctx.errors.push(`Invalid encoding type '${args[0]}' for .encoding at ${originDesc} - expected string literal`);
-    return true;
+    return;
   }
-  
+
   const typeLower = typeArg.toLowerCase();
   if (typeLower !== 'ascii' && typeLower !== 'screencodecommodore') {
     ctx.errors.push(`Unknown encoding type '${typeArg}' for .encoding at ${originDesc} - expected 'ascii' or 'screencodecommodore'`);
-    return true;
+    return;
   }
-  
+
   ctx.textEncoding = typeLower as TextEncodingType;
-  
+
   // Parse optional case argument
   if (args.length >= 2) {
     const caseArg = parseStringLiteral(args[1]);
     if (caseArg === null) {
       ctx.errors.push(`Invalid case '${args[1]}' for .encoding at ${originDesc} - expected string literal`);
-      return true;
+      return;
     }
     const caseLower = caseArg.toLowerCase();
     if (caseLower !== 'mixed' && caseLower !== 'lower' && caseLower !== 'upper') {
       ctx.errors.push(`Unknown case '${caseArg}' for .encoding at ${originDesc} - expected 'mixed', 'lower', or 'upper'`);
-      return true;
+      return;
     }
     ctx.textCase = caseLower as TextCaseType;
   } else {
     ctx.textCase = 'mixed';  // Default case when not provided
   }
-  
-  return true;
+
+  return;
 }
 
 export function handleTextDirective(
@@ -286,21 +283,19 @@ export function handleTextDirective(
   tokens: string[],
   out?: number[],
   addrRef?: { value: number }
-): { handled: boolean; emitted?: number } {
-  const op = tokens[0].toUpperCase();
-  if (op !== '.TEXT') return { handled: false };
-
+): number // emitted byte count
+{
   const originDesc = describeOrigin(origin, lineIndex, sourcePath);
   const rest = argsAfterToken(line, tokens[0], tokenOffsets[0]).trim();
-  
+
   if (!rest.length) {
     ctx.errors.push(`Missing value for .text at ${originDesc}`);
-    return { handled: true };
+    return 0;
   }
-  
+
   const parts = splitTopLevelArgs(rest);
   let emitted = 0;
-  
+
   for (const part of parts) {
     const parsed = parseTextLiteralToBytes(part, ctx.textEncoding, ctx.textCase);
     if ('error' in parsed) {
@@ -317,6 +312,6 @@ export function handleTextDirective(
       }
     }
   }
-  
-  return { handled: true, emitted };
+
+  return emitted;
 }

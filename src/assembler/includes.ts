@@ -22,15 +22,15 @@ export function processIncludes(
   if (depth > MAX_INCLUDE_DEPTH) {
     throw new Error(`Include recursion too deep (>${MAX_INCLUDE_DEPTH}) when processing ${file || '<memory>'}`);
   }
-  
+
   const outLines: string[] = [];
   const origins: Array<{ file?: string; line: number }> = [];
   const srcLines = content.split(/\r?\n/);
-  
+
   for (let li = 0; li < srcLines.length; li++) {
     const raw = srcLines[li];
     const trimmed = raw.replace(/\/\/.*$|;.*$/, '').trim();
-    
+
     // match .include "filename" or .include 'filename'
     const m = trimmed.match(/^\.include\s+["']([^"']+)["']/i);
     if (m) {
@@ -41,7 +41,7 @@ export function processIncludes(
         const baseDir = file ? path.dirname(file) : (sourcePath ? path.dirname(sourcePath) : process.cwd());
         incPath = path.resolve(baseDir, incPath);
       }
-      
+
       let incText: string;
       try {
         incText = fs.readFileSync(incPath, 'utf8');
@@ -49,7 +49,7 @@ export function processIncludes(
         const em = err && (err as any).message ? (err as any).message : String(err);
         throw new Error(`Failed to include '${inc}' at ${file || sourcePath || '<memory>'}:${li+1} - ${em}`);
       }
-      
+
       const nested = processIncludes(incText, incPath, sourcePath, depth + 1);
       for (let k = 0; k < nested.lines.length; k++) {
         outLines.push(nested.lines[k]);
@@ -57,10 +57,10 @@ export function processIncludes(
       }
       continue;
     }
-    
+
     outLines.push(raw);
     origins.push({ file: file || sourcePath, line: li + 1 });
   }
-  
+
   return { lines: outLines, origins };
 }

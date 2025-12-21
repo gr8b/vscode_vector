@@ -1,9 +1,9 @@
 import { ExpressionEvalContext, SourceOrigin } from './types';
-import { 
-  toByte, 
-  parseWordLiteral, 
+import {
+  toByte,
+  parseWordLiteral,
   describeOrigin,
-  splitTopLevelArgs 
+  splitTopLevelArgs
 } from './utils';
 import { evaluateConditionExpression } from './expression';
 import { argsAfterToken } from './common';
@@ -30,17 +30,17 @@ export function handleDB(
   const rest = argsAfterToken(line, tokens[0], tokenOffsets[0]).trim();
   const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
   let emitted = 0;
-  
+
   for (const p of parts) {
     let val = toByte(p);
     // If toByte fails, try evaluating as an expression
     if (val === null && out) {
-      const exprCtx: ExpressionEvalContext = { 
-        labels: ctx.labels, 
-        consts: ctx.consts, 
-        localsIndex: ctx.localsIndex, 
-        scopes: ctx.scopes, 
-        lineIndex: srcLine 
+      const exprCtx: ExpressionEvalContext = {
+        labels: ctx.labels,
+        consts: ctx.consts,
+        localsIndex: ctx.localsIndex,
+        scopes: ctx.scopes,
+        lineIndex: srcLine
       };
       try {
         val = evaluateConditionExpression(p, exprCtx, true);
@@ -49,13 +49,13 @@ export function handleDB(
         val = 0;
       }
     }
-    
+
     if (out && val !== null) {
       out.push(val & 0xff);
     }
     emitted++;
   }
-  
+
   return emitted;
 }
 
@@ -72,36 +72,36 @@ export function handleDW(
   const op = tokens[0].toUpperCase();
   const originDesc = describeOrigin(origin, srcLine, sourcePath);
   const rest = argsAfterToken(line, tokens[0], tokenOffsets[0]).trim();
-  
+
   if (!rest.length) {
     ctx.errors.push(`Missing value for ${op} at ${originDesc}`);
     return 0;
   }
-  
+
   const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
   if (!parts.length) {
     ctx.errors.push(`Missing value for ${op} at ${originDesc}`);
     return 0;
   }
-  
+
   let emitted = 0;
   for (const part of parts) {
     const parsed = parseWordLiteral(part);
     let value = 0;
-    
+
     if ('error' in parsed) {
       ctx.errors.push(`${parsed.error} at ${originDesc}`);
     } else {
       value = parsed.value & 0xffff;
     }
-    
+
     if (out) {
       out.push(value & 0xff);
       out.push((value >> 8) & 0xff);
     }
     emitted += 2;
   }
-  
+
   return emitted;
 }
 
@@ -114,11 +114,11 @@ export function handleDS(
 ): number {
   const rest = argsAfterToken(line, tokens[0], tokenOffsets[0]).trim();
   const n = parseInt(rest);
-  
+
   if (isNaN(n) || n < 0) {
     ctx.errors.push(`Bad DS count '${rest}' at ${srcLine}`);
     return 0;
   }
-  
+
   return n;
 }
