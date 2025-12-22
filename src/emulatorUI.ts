@@ -716,7 +716,7 @@ export function resolveInstructionHover(
 
   const normalizedAddr = address & 0xffff;
   const instr = hardware.Request(HardwareReq.GET_INSTR, { "addr": normalizedAddr })['data'] as number[];
-  const opcode = instr.shift() ?? 0;
+  const opcode = instr[0];
   const bytes = instr;
 
   const sourceLine = document.lineAt(position.line).text;

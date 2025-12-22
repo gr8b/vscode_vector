@@ -6,7 +6,7 @@ import * as ext_consts from './extention/consts';
 import { provideDefinition } from './extention/provider_include';
 import { createProject } from './extention/cmd_create_project';
 import { compileProject } from './extention/cmd_compile_project';
-import { toggleBreakpoint, toggleBreakpointFromArg } from './extention/cmd_toggle_bp';
+import { toggleBreakpointFromArg } from './extention/cmd_toggle_bp';
 import { provideHover } from './extention/provider_hover';
 import {provideDebugConfigurations, resolveDebugConfiguration} from './extention/provider_debug_conf';
 
