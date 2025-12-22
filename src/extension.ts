@@ -122,9 +122,6 @@ export function activate(context: vscode.ExtensionContext)
     context.subscriptions.push(asmSymbolDefinitionProvider);
 
 
-
-
-  // TODO: it excessively compiles all projects on each breakpoint change!!!
   // Persist breakpoints whenever they change in the debugger model
   context.subscriptions.push(vscode.debug.onDidChangeBreakpoints(async (ev) =>
   {
@@ -162,8 +159,8 @@ export function activate(context: vscode.ExtensionContext)
         const batch = new Set(pendingBreakpointAsmPaths);
         pendingBreakpointAsmPaths.clear();
         if (batch.size === 0) return;
-        // compile project for the affected asm paths
-        await ext_prg.compileProjectsForBreakpointChanges(devectorOutput);
+        // compile only projects that own the affected asm paths
+        await ext_prg.compileProjectsForBreakpointChanges(devectorOutput, batch);
 
       }).catch((err) => {
         ext_utils.logOutput(

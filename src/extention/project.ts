@@ -6,7 +6,7 @@ import * as ext_types from './project_info';
 import { compileAsmSource } from './compile';
 import { reloadEmulatorBreakpointsFromFile } from '../emulatorUI';
 import * as ext_consts from './consts';
-
+import { collectIncludeFiles } from '../assembler/includes';
 
 
 export async function loadAllProjects(
@@ -207,16 +207,37 @@ export async function compileProjectFile(
 ////////////////////////////////////////////////////////////////////////////////
 
 
-// TODO: think of reusing existing func insted of that one
 export async function compileProjectsForBreakpointChanges(
-  devectorOutput: vscode.OutputChannel)
+  devectorOutput: vscode.OutputChannel,
+  asmPaths: Set<string>)
 {
+  if (!asmPaths.size) return;
   if (!vscode.workspace.workspaceFolders || !vscode.workspace.workspaceFolders.length) return;
   const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
   const infos = await loadAllProjects(devectorOutput, workspaceRoot, { silent: true });
   if (!infos.length) return;
 
-  for (const project of infos) {
+  // compile only projects that own the affected asm paths
+  for (const project of infos)
+  {
+    let shouldCompile = false;
+    // collect all asm files of the project
+    const mainsm = project.absolute_asm_path;
+    if (mainsm && fs.existsSync(mainsm))
+    {
+      const source = fs.readFileSync(mainsm, 'utf8');
+      const asmFiles = collectIncludeFiles(source, mainsm);
+      asmFiles.add(mainsm);
+      // check if any affected asm path is in the project
+      for (const p of asmPaths) {
+        if (asmFiles.has(p)) {
+          shouldCompile = true;
+          break;
+        }
+      }
+    }
+
+    if (!shouldCompile) continue;
     await compileProjectFile(devectorOutput, project, { silent: true, reason: 'breakpoint change' });
   }
 }

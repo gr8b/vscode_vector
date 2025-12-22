@@ -64,3 +64,46 @@ export function processIncludes(
 
   return { lines: outLines, origins };
 }
+
+// Recursively collect all included files
+export function collectIncludeFiles(
+  content: string,
+  file?: string,
+  sourcePath?: string,
+  depth = 0,
+  collected: Set<string> = new Set()
+): Set<string>
+{
+  if (depth > MAX_INCLUDE_DEPTH) {
+    throw new Error(`Include recursion too deep (>${MAX_INCLUDE_DEPTH}) when processing ${file || '<memory>'}`);
+  }
+
+  const srcLines = content.split(/\r?\n/);
+  for (let li = 0; li < srcLines.length; li++) {
+    const raw = srcLines[li];
+    const trimmed = raw.replace(/\/\/.*$|;.*$/, '').trim();
+    const m = trimmed.match(/^\.include\s+["']([^"']+)["']/i);
+    if (!m) continue;
+
+    const inc = m[1];
+    let incPath = inc;
+    if (!path.isAbsolute(incPath)) {
+      const baseDir = file ? path.dirname(file) : (sourcePath ? path.dirname(sourcePath) : process.cwd());
+      incPath = path.resolve(baseDir, incPath);
+    }
+
+    collected.add(incPath);
+
+    let incText: string;
+    try {
+      incText = fs.readFileSync(incPath, 'utf8');
+    } catch (err) {
+      const em = err && (err as any).message ? (err as any).message : String(err);
+      throw new Error(`Failed to include '${inc}' at ${file || sourcePath || '<memory>'}:${li + 1} - ${em}`);
+    }
+
+    collectIncludeFiles(incText, incPath, sourcePath, depth + 1, collected);
+  }
+
+  return collected;
+}
