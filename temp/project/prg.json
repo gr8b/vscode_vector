@@ -1,0 +1,31 @@
+{
+    "breakpoints": [
+        {
+            "addr": "0x0139",
+            "autoDel": false,
+            "comment": "",
+            "cond": "=ANY",
+            "memPages": 4294967295,
+            "operand": "A",
+            "status": 1,
+            "value": "0x00"
+        },
+        {
+            "addr": "0x012E",
+            "autoDel": false,
+            "comment": "",
+            "cond": "=ANY",
+            "memPages": 4294967295,
+            "operand": "A",
+            "status": 1,
+            "value": "0x00"
+        }
+    ],
+    "codePerfs": null,
+    "comments": null,
+    "consts": null,
+    "labels": null,
+    "memoryEdits": null,
+    "scripts": null,
+    "watchpoints": null
+}

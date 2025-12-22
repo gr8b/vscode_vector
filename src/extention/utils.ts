@@ -276,28 +276,42 @@ export const openDocument = async (logChannel: vscode.OutputChannel, uri: vscode
 
 function lookupLineAddress(
   tokens: any, filePath: string, line: number)
-  : string | undefined
+  : string | string[] | undefined
 {
   if (!tokens || !tokens.lineAddresses) return undefined;
   const base = path.basename(filePath).toLowerCase();
   const perFile = tokens.lineAddresses[base];
   if (!perFile) return undefined;
-  const pick = (value: any): string | undefined => {
-    if (typeof value === 'string' && value) return value;
-    if (typeof value === 'number' && Number.isFinite(value)) {
-      return '0x' + (value & 0xffff).toString(16).toUpperCase().padStart(4, '0');
-    }
-    if (Array.isArray(value) && value.length) {
-      const fromString = value.find(v => typeof v === 'string' && v) as string | undefined;
-      if (fromString) return fromString;
-      const fromNumber = value.find(v => typeof v === 'number' && Number.isFinite(v)) as number | undefined;
-      if (fromNumber !== undefined) {
-        return '0x' + (fromNumber & 0xffff).toString(16).toUpperCase().padStart(4, '0');
+  const normalizeValues = (value: any): string[] => {
+    const out: string[] = [];
+    const pushVal = (v: any) => {
+      if (typeof v === 'string' && v) {
+        if (!out.includes(v)) out.push(v);
+        return;
       }
+      if (typeof v === 'number' && Number.isFinite(v)) {
+        const hex = '0x' + (v & 0xffff).toString(16).toUpperCase().padStart(4, '0');
+        if (!out.includes(hex)) out.push(hex);
+      }
+    };
+    if (Array.isArray(value)) {
+      for (const v of value) pushVal(v);
+    } else {
+      pushVal(value);
     }
-    return undefined;
+    return out;
   };
-  return pick(perFile[line]) ?? pick(perFile[String(line)]);
+
+  const combined: string[] = [];
+  const pushAll = (value: any) => {
+    const vals = normalizeValues(value);
+    for (const v of vals) if (!combined.includes(v)) combined.push(v);
+  };
+  pushAll(perFile[line]);
+  pushAll(perFile[String(line)]);
+
+  if (!combined.length) return undefined;
+  return combined.length === 1 ? combined[0] : combined;
 };
 
 export function attachAddressFromTokens(

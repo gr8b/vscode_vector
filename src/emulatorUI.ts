@@ -855,7 +855,7 @@ function collectBreakpointAddresses(tokens: any): Map<number, BreakpointMeta> {
   if (!tokens || typeof tokens !== 'object') return resolved;
 
   const labelAddrByName = new Map<string, number>();
-  const lineAddrByFileLine = new Map<string, number>();
+  const lineAddrByFileLine = new Map<string, number[]>();
 
   if (tokens.labels && typeof tokens.labels === 'object') {
     for (const [labelName, rawInfo] of Object.entries(tokens.labels)) {
@@ -866,7 +866,7 @@ function collectBreakpointAddresses(tokens: any): Map<number, BreakpointMeta> {
       const srcBase = normalizeFileKey(typeof info?.src === 'string' ? info.src : undefined);
       const lineNum = typeof info?.line === 'number' ? info.line : undefined;
       if (srcBase && lineNum !== undefined) {
-        lineAddrByFileLine.set(formatFileLineKey(srcBase, lineNum), addr);
+        lineAddrByFileLine.set(formatFileLineKey(srcBase, lineNum), [addr & 0xffff]);
       }
     }
   }
@@ -881,7 +881,7 @@ function collectBreakpointAddresses(tokens: any): Map<number, BreakpointMeta> {
         if (!Number.isFinite(lineNum)) continue;
         const addresses = coerceAddressList(addrRaw);
         if (!addresses.length) continue;
-        lineAddrByFileLine.set(formatFileLineKey(normalizedFileKey, lineNum), addresses[0]);
+        lineAddrByFileLine.set(formatFileLineKey(normalizedFileKey, lineNum), addresses);
       }
     }
   }
@@ -903,26 +903,39 @@ function collectBreakpointAddresses(tokens: any): Map<number, BreakpointMeta> {
     return undefined;
   };
 
-    const resolveAddress = (entry: any, fileKey?: string): number | undefined => {
-    if (!entry || typeof entry !== 'object') return parseAddressLike(entry);
-    const direct = parseAddressLike(entry.addr ?? entry.address);
-    if (direct !== undefined) return direct;
-    if (typeof entry.label === 'string') {
-      const byLabel = labelAddrByName.get(entry.label);
-      if (byLabel !== undefined) return byLabel;
+  const resolveAddresses = (entry: any, fileKey?: string): number[] => {
+    const results: number[] = [];
+    const pushAddr = (addr: number | undefined) => {
+      if (addr === undefined) return;
+      const normalized = addr & 0xffff;
+      if (!results.includes(normalized)) results.push(normalized);
+    };
+    if (!entry || typeof entry !== 'object') {
+      pushAddr(parseAddressLike(entry));
+      return results;
+    }
+    const direct = coerceAddressList(entry.addr ?? entry.address);
+    for (const addr of direct) pushAddr(addr);
+    if (!results.length && typeof entry.label === 'string') {
+      pushAddr(labelAddrByName.get(entry.label));
     }
     if (fileKey && typeof entry.line === 'number') {
-        const fromLine = lineAddrByFileLine.get(formatFileLineKey(fileKey, entry.line));
-      if (fromLine !== undefined) return fromLine;
+      const fromLine = lineAddrByFileLine.get(formatFileLineKey(fileKey, entry.line));
+      if (fromLine) {
+        for (const addr of fromLine) pushAddr(addr);
+      }
     }
-    return undefined;
+    return results;
   };
 
   const processEntry = (entry: any, fileKey?: string) => {
     const normalizedFile = fileKey ? normalizeFileKey(fileKey) : undefined;
-    const addr = resolveAddress(entry, normalizedFile);
-    if (addr === undefined) return;
-    registerBreakpoint(addr, resolveEnabled(entry));
+    const addresses = resolveAddresses(entry, normalizedFile);
+    if (!addresses.length) return;
+    const enabled = resolveEnabled(entry);
+    for (const addr of addresses) {
+      registerBreakpoint(addr, enabled);
+    }
   };
 
   const bpData = tokens.breakpoints;
