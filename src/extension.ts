@@ -15,7 +15,9 @@ import {
   onEmulatorToolbarStateChange,
   pauseEmulatorPanel,
   performEmulatorDebugAction,
-  resumeEmulatorPanel
+  resumeEmulatorPanel,
+  stopAndCloseEmulatorPanel,
+  onEmulatorPanelClosed
 } from './emulatorUI';
 
 type DebugRequestMessage = { seq: number; type: 'request'; command: string; arguments?: any };
@@ -27,6 +29,7 @@ class EmulatorDebugAdapter implements vscode.DebugAdapter {
   private readonly emitter = new vscode.EventEmitter<OutgoingMessage>();
   private seq = 1;
   private readonly toolbarSub: vscode.Disposable;
+  private readonly panelClosedSub: vscode.Disposable;
 
   constructor() {
     this.toolbarSub = onEmulatorToolbarStateChange((isRunning) => {
@@ -35,6 +38,9 @@ class EmulatorDebugAdapter implements vscode.DebugAdapter {
       } else {
         this.sendEvent('stopped', { reason: 'pause', threadId: 1 });
       }
+    });
+    this.panelClosedSub = onEmulatorPanelClosed(() => {
+      this.sendEvent('terminated', {});
     });
   }
 
@@ -130,6 +136,8 @@ class EmulatorDebugAdapter implements vscode.DebugAdapter {
     }
     case 'disconnect':
     case 'terminate':
+      stopAndCloseEmulatorPanel();
+      this.sendEvent('terminated', {});
       respond();
       break;
     case 'evaluate':
@@ -151,6 +159,7 @@ class EmulatorDebugAdapter implements vscode.DebugAdapter {
 
   dispose(): void {
     this.toolbarSub.dispose();
+    this.panelClosedSub.dispose();
     this.emitter.dispose();
   }
 }

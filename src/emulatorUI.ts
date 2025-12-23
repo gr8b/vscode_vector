@@ -60,14 +60,17 @@ let lastDataAccessLog: MemoryAccessLog | null = null;
 
 export type DebugAction = 'pause' | 'run' | 'stepOver' | 'stepInto' | 'stepOut' | 'stepFrame' | 'step256' | 'restart';
 type ToolbarListener = (isRunning: boolean) => void;
+type PanelClosedListener = () => void;
 
 const toolbarListeners = new Set<ToolbarListener>();
+const panelClosedListeners = new Set<PanelClosedListener>();
 
 let currentPanelController: {
   pause: () => void;
   resume: () => void;
   stepFrame: () => void;
   performDebugAction: (action: DebugAction) => void;
+  stopAndClose: () => void;
 } | null = null;
 
 // View modes for display rendering
@@ -107,6 +110,7 @@ export async function openEmulatorPanel(
     enableScripts: true,
     localResourceRoots: [vscode.Uri.file(path.join(context.extensionPath, 'images'))]
   });
+  let panelDisposed = false;
 
   const html = getWebviewContent();
   panel.webview.html = html;
@@ -186,6 +190,8 @@ export async function openEmulatorPanel(
   // dispose the Output channel when the panel is closed
   panel.onDidDispose(
     async () => {
+      panelDisposed = true;
+      try { emu.hardware?.Request(HardwareReq.STOP); } catch (e) {}
       if (emu.hardware) {
         // Save the RAM Disk
         if (project && project.settings && !project.settings.ramDiskClearAfterRestart)
@@ -245,6 +251,11 @@ export async function openEmulatorPanel(
       highlightContext = null;
       resetMemoryDumpState();
       disposeHardwareStatsTracking();
+
+      try { emitToolbarState(false); } catch (e) {}
+      for (const listener of panelClosedListeners) {
+        try { listener(); } catch (err) { console.error('Emulator panel close listener failed', err); }
+      }
 
     }, null, context.subscriptions
   );
@@ -429,7 +440,13 @@ export async function openEmulatorPanel(
     pause: () => { handleDebugAction('pause'); },
     resume: () => { handleDebugAction('run'); },
     stepFrame: () => { handleDebugAction('stepFrame'); },
-    performDebugAction: (action: DebugAction) => { handleDebugAction(action); }
+    performDebugAction: (action: DebugAction) => { handleDebugAction(action); },
+    stopAndClose: () => {
+      if (panelDisposed) return;
+      try { emu.hardware?.Request(HardwareReq.STOP); } catch (e) {}
+      emitToolbarState(false);
+      try { panel.dispose(); } catch (e) {}
+    }
   };
 
   updateMemoryDumpFromHardware(panel, emu.hardware, 'pc');
@@ -601,10 +618,25 @@ export function performEmulatorDebugAction(action: DebugAction): boolean {
   return false;
 }
 
+export function stopAndCloseEmulatorPanel(): void {
+  if (currentPanelController) {
+    currentPanelController.stopAndClose();
+  } else {
+    vscode.window.showWarningMessage('Emulator panel not open');
+  }
+}
+
 export function onEmulatorToolbarStateChange(listener: (isRunning: boolean) => void): vscode.Disposable {
   toolbarListeners.add(listener);
   return {
     dispose: () => toolbarListeners.delete(listener)
+  };
+}
+
+export function onEmulatorPanelClosed(listener: PanelClosedListener): vscode.Disposable {
+  panelClosedListeners.add(listener);
+  return {
+    dispose: () => panelClosedListeners.delete(listener)
   };
 }
 
