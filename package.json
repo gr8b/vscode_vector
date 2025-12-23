@@ -32,6 +32,7 @@
   "activationEvents": [
     "onLanguage:asm",
     "onCommand:devector.compileProject",
+    "onCommand:devector.runProject",
     "onCommand:devector.createProject",
     "onDebug"
   ],
@@ -64,6 +65,10 @@
       {
         "command": "devector.compileProject",
         "title": "Devector: Compile Project"
+      },
+      {
+        "command": "devector.runProject",
+        "title": "Devector: Run Project"
       }
     ],
     "keybindings": [

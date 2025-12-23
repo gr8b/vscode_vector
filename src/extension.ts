@@ -7,6 +7,7 @@ import { provideDefinition } from './extention/provider_include';
 import { provideSymbolDefinition } from './extention/provider_symbol_definition';
 import { createProject } from './extention/cmd_create_project';
 import { compileProject } from './extention/cmd_compile_project';
+import { runProject } from './extention/cmd_run_project';
 import { toggleBreakpointFromArg } from './extention/cmd_toggle_bp';
 import { provideHover } from './extention/provider_hover';
 import {provideDebugConfigurations, resolveDebugConfiguration} from './extention/provider_debug_conf';
@@ -188,6 +189,10 @@ export function activate(context: vscode.ExtensionContext)
   const compileProjectDisposable = vscode.commands.registerCommand(
     ext_consts.EXTENTION_NAME + '.compileProject',() => compileProject(devectorOutput, context));
   context.subscriptions.push(compileProjectDisposable);
+
+  const runProjectDisposable = vscode.commands.registerCommand(
+    ext_consts.EXTENTION_NAME + '.runProject',() => runProject(devectorOutput, context));
+  context.subscriptions.push(runProjectDisposable);
 
   // Register a debug configuration provider so the debugger is visible and
   // VS Code can present debug configurations and a F5 launch option.
