@@ -100,7 +100,7 @@ This is the emulator main panel. You will see it when you start the emulation pr
 
 ### Debug Toobar
 
-This compact toolbar on top of the frame has the debugger controls below:
+The execution flow can be controlled via the standard VS Code debug toolbar as well as the extended toolbar in the emulator panel:
 
 - **Run / Pause**: to pause and continue the hardware simulation.
 - **Step Over**: it runs until the next instruction completes helping to step over the subroutines or conditional branches but honoring breakpoints along the path.
