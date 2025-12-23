@@ -177,6 +177,35 @@ const tests: DirectiveTestCase[] = [
         }
     },
     {
+        name: '.incbin comprehensive test with multiple use cases',
+        sourceFile: 'incbin_comprehensive.asm',
+        expect: {
+            // First block: full file (16 bytes)
+            // Second block at $8000: 8 bytes from offset 4 (0x55..0xCC)
+            // Third block at $9000: 6 bytes from offset 10 (0xBB..0x00)
+            // Final marker: 0xFF
+            bytes: [
+                // Full file at $1000
+                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00,
+                // 8 bytes from offset 4 at $8000
+                0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC,
+                // 6 bytes from offset 10 at $9000
+                0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00,
+                // Final marker
+                0xFF
+            ],
+            labels: {
+                music_start: 0x1000,
+                music_end: 0x1010,
+                graphics_start: 0x8000,
+                graphics_end: 0x8008,
+                remaining_start: 0x9000,
+                remaining_end: 0x9006,
+                end_marker: 0x9006
+            }
+        }
+    },
+    {
         name: '.print accumulates formatted output',
         sourceFile: 'print_basic.asm',
         expect: {
