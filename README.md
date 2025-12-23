@@ -4,207 +4,139 @@ This repository contains a VS Code extension with key features: a two-pass Intel
 
 ## Table of Contents
 
-- [Quick start](#quick-start)
-- [Test Suites](#test-suites)
-  - [Assembler directive tests](#1-assembler-directive-tests)
-  - [Emulator tests](#2-emulator-tests)
-- [How to assemble and run](#how-to-assemble-and-run)
+- [Quick Start](#quick-start)
+- [Project Configuration](#project-configuration)
+  - [Example](#example-projectjson)
+  - [Fields](#fields)
+  - [Settings](#settings)
 - [VS Code editor helpers](#vs-code-editor-helpers)
 - [Emulator panel controls](#emulator-panel-controls)
-- [Symbol hover hints while paused](#symbol-hover-hints-while-paused)
+  - [Debug Toobar](#debug-toobar)
+- [Extra VS Code editor helpers](#extra-vs-code-editor-helpers)
 - [Memory Dump panel](#memory-dump-panel)
 - [Assembler](#assembler)
+  - [Expressions and Operators](#expressions-and-operators)
+- [Dev's Pit](#devs-pit)
+  - [How to Compile this Extentsion](#how-to-compile-this-extentsion)
+  - [How to Test the extension in the VS Code](#how-to-test-the-extension-in-the-vs-code)
+  - [Tests Suits](#tests-suits)
+    - [Exclusive Tests](#exclusive-tests)
 - [Tools](#tools)
-- [Implementation notes](#implementation-notes)
+  - [FDD utility CLI](#fdd-utility-cli)
+  - [assemble_one](#assemble_one)
 
-## Quick start
 
-1. Install dependencies:
+## Quick Start
 
-```pwsh
-npm install
-```
+- Open the project folder in VS Code.
+- Run **Devector: Create Project** to scaffold a new Vector 06c project.
+- Build with **Devector: Compile Project**.
+- Press **F5** to launch and debug in the emulator.
 
-2. Build the tools (produces `out/`):
+Tips:
+- If the emulator panel was closed, you may be prompted for the RAM disk image path.
+- With multiple projects, **Devector: Compile Project** and **F5** will ask which project to build/run.
 
-```pwsh
-npm run compile
-```
-
-3. Build and test:
-
-```pwsh
-npm run test
-```
-
-## Test Suites
-
-### 1. Assembler directive tests
-
-```pwsh
-npm run test-directives
-```
-
-The command recompiles the TypeScript sources and executes every test case under `test/assembler/directives`, reporting a PASS/FAIL line for each directive scenario plus a summary total. The process exits with a non-zero status when a failure is detected, so it can plug directly into CI.
-Current coverage includes `.org`, `.align` (success + failure paths), `.if`/`.endif`, `.loop`/`.endloop` (standalone and inside macros), `.include` (flat + nested + missing-file errors), `.print`, `DS`, literal/binary/hex formats with expression evaluation, and both macro-bodied plus standalone local-label resolution. Add more fixture `.asm` files under `test/assembler/directives` and register them in `src/tools/run_directive_tests.ts` to grow the matrix.
-
-### 2. Emulator tests
-
-Run the i8080 CPU emulator test suite at any time:
-
-```pwsh
-npm run test-emulator
-```
-
-The command recompiles the TypeScript sources and executes all emulator test cases stored in `.test/emulator/`. The test runner:
-
-- Assembles each `.asm` test file
-- Loads the resulting ROM into the emulator
-- Executes a specified number of instructions
-- Validates CPU state (registers, flags) and memory against expected values
-- Generates a comprehensive report grouped by test category
-
-Current coverage includes:
-- **Data Transfer**: MVI, MOV, LXI, LDA, STA, MOV M,r
-- **Arithmetic**: ADD, SUB, INR, DCR, DAD, ADC, SBB, INX, DCX
-- **Logical**: ANA, ORA, XRA, CMP, CMA
-- **Rotate**: RLC, RRC
-- **Control Flow**: JMP, JNZ, JZ, CALL, RET
-- **Stack**: PUSH, POP
-- **Flags**: STC, CMC
-
-Add more test `.asm` files under `.test/emulator/` and register them in `src/tools/run_emulator_tests.ts` to expand the test matrix. Each test case specifies:
-- Source file name
-- Number of instructions to execute
-- Expected register values, flag states, and/or memory contents
-
-## How to assemble and run
-
-- Compile TypeScript:
-
-```pwsh
-npm run compile
-```
-
-- Assemble `test.asm` into `test.rom` (and write a token file `test.json` with labels):
-
-```pwsh
-node .\scripts\run-assembler.js
-```
-
-- Compile the active `test/project/*.project.json` configuration from VS Code via the **"Compile Vector06c Project"** command. The command locates the project JSON inside the root of `workspace`, reads its `main` ASM entry, and assembles it.
-- Project builds emit `<project-name>.rom` (and the matching `<project-name>.debug.json` tokens file) beside the `.project.json`, so the name field controls the output artifact names.
-- Adding or removing a breakpoint inside any `.asm` file automatically reruns the project compile so the ROM and breakpoint metadata stay in sync.
-
-- Run the external emulator (example path shown for convenience):
-
-```pwsh
-C:\Work\Programming\devector\bin\devector.exe .\test.rom
-```
+Project artifacts:
+- `<project_name>.project.json` — project settings.
+- `<project_name>.debug.json` — debug metadata (tokens, labels, consts, breakpoints).
+- `<project_name>.rom` — Vector 06c executable loaded by the emulator.
+- `<project_name>.ram_disk.bin` — RAM disk image (all eight supported disks).
+- `<name>.fdd` — floppy disk image (usually 820 KB). Add `"fddPath": "./out/<your_fdd_name>.fdd"` to settings to auto-load it on the next run.
 
 ## Project Configuration
 
-You can configure your project using a `.project.json` file. This file defines the project name, main assembly file, output ROM name, and optional settings.
+All projects begin by creating a `.project.json` file that declares the project name, entry ASM file, output ROM path, and any optional emulator settings. It's an entry point for all extention command. Generate a fresh project file with **Devector: Create Project**.
 
 ### Example `.project.json`
 
 ```json
 {
-    "name": "my_project",
-    "main": "main.asm",
-    "rom": "./out/game.rom",
-    "fdd": "./out/game.fdd",
-    "settings": {
-        "speed": 1.5
-    }
-}
-```
-```json
-{
-    "name": "my_project",
-    "main": "main.asm",
-    "rom": "./out/game.rom",
-    "fdd": "./out/game.fdd",
-    "settings": {
-        "speed": "max",
-        "fddPath": "./out/game_saved.fdd"
-    }
+  "name": "prg",
+  "asmPath": "prg_main.asm",
+  "debugPath": "prg.debug.json",
+  "romPath": "out\\prg.rom",
+  "fddPath": "out\\prg.fdd",
+  "settings": {
+    "speed": "max",
+    "viewMode": "noBorder",
+    "ramDiskPath": "out\\prg.ram_disk.bin"
+  }
 }
 ```
 
 ### Fields
 
-- **name**: The name of the project.
-- **main**: The main assembly file to compile.
-- **rom**: The path to the output ROM file.
-- **fdd**: (Optional) The path to the FDD disk image to run. The emulator runs prefers fdd over rom if present a valid path.
-- **settings**: (Optional) Project-specific settings.
+- **name**: Project name.
+- **asmPath**: Entry assembly file to compile (e.g., `prg_main.asm`).
+- **debugPath**: (Optional) Path for the generated debug metadata (e.g., `prg.debug.json`).
+- **romPath**: (Optional) Output ROM path (e.g., `out\\prg.rom`).
+- **fddPath**: (Optional) FDD image to boot; takes precedence over `romPath` when valid.
+- **settings**: (Optional) Per-project emulator preferences (see below).
 
 ### Settings
 
-- **speed**: Controls the initial emulation speed.
-  - Values: `0.1`, `1`, `2`, `4`, `8`, or `"max"`.
-  - Default: `1` (normal speed).
-  - This setting is automatically updated when you change the speed in the emulator panel, persisting your preference across sessions.
+- **speed**: (Optional) Initial emulation speed (`0.1`, `1`, `2`, `4`, `8`, or `"max"`).
+- **viewMode**: (Optional) Emulator viewport mode (`"border"`, `"noBorder"`).
+- **ramDiskPath**: (Optional) RAM disk image path for persistence across emulator restarts.
+- **ramDiskClearAfterRestart**: (Optional) Clear RAM disk data on emulator restart.
+- **fddIdx**: (Optional): Floppy drive index to load fdd (0-3).
+- **autoBoot**: (Optional): Automatically boot FDD if pfddPath is set.
+- **fddReadOnly**: (Optional): Open FDD in read-only mode.
 
-- **fddPath**: (Optional) Path to save FDD disk data for persistence across emulator restarts.
-  - When set, any writes to the FDD (floppy disk) during emulation are automatically saved to this file when the emulator closes.
-  - On the next run, if this saved file exists, it will be loaded instead of the original FDD file specified in the `fdd` field.
-  - Example: `"fddPath": "./out/saved_disk.fdd"`
-  - If not set, FDD changes are lost on each emulator restart.
-  - This allows you to preserve game saves, high scores, and other data written to the floppy disk.
-
-- **ramDiskData**: (Optional) Path to save RAM disk data for persistence across emulator restarts.
-  - When set, RAM disk contents are automatically saved to this file when the emulator closes and loaded on startup.
-  - Example: `"ramDiskData": "./out/ramdisk.bin"`
 
 ## VS Code editor helpers
 
-The bundled extension now exposes quality-of-life helpers whenever you edit `.asm` sources in VS Code:
+The bundled extension exposes a veriaty quality-of-life helpers whenever you edit `.asm` sources in VS Code:
 
-- **Ctrl+click navigation for includes**: hold `Ctrl` (or `Cmd` on macOS) to underline the path in the ASM '.include' directive and click it to open the target file.
+- **Navigation for includes**: hold `Ctrl` (or `Cmd` on macOS) to underline the path in the ASM '.include' directive, any label or a constant and click it to open the target file.
+- **Navigation for consts and global labels**: hold `Ctrl` (or `Cmd` on macOS) to underline the constant or any label and click it to open navigate it. Please keep in mind it uses the debug metadata gathered from the last compilation. If you don't get the navigation, compile the project.
+- **Syntax highlight**: ASM code uses a refined, color scheme inspired by the Retor-Assembler that cleanly differentiates constants, labels, instructions, and comments, making long sessions easier on the eyes and faster to parse. Make sure you select the **ASM** language in the bottom panel.
+- **Breakpoint handling**: Click the left gutter to toggle breakpoints, or use the built-in **Debug: Toggle Breakpoint** command. All active and disabled breakpoints appear in the **BREAKPOINTS** panel. Adding breakpoints in the editor available only within the **ASM** language that comes with this extension. Make sure it is selected in the bottom panel. Breakpoint gutter respects only meaningful lines (labels/instructions) and ignores comments, .byte, .include, etc.
 
 ## Emulator panel controls
 
-Launching the VS Code emulator panel loads the ROM and shows a compact toolbar on top of the frame preview. The buttons behave like classic debugger controls:
+This is the emulator main panel. You will see it when you start the emulation pressing F5 and chosing one of the available launch configuration. That panel includes the debug toolbar, a rendered frame, hardware statistics, and the memory dump. It provides realtime data to monitor execution, memory, and performance while you debug.
 
-- **Run / Pause** toggles the hardware thread. While running it reads “Pause”; hitting it stops execution, captures the current frame, and switches back to “Run”.
-- **Step Over** executes a single instruction after stopping the machine (currently a simple single-instruction step without temporary breakpoints).
-- **Step Into** behaves like a classic single-instruction step, halting immediately after execution.
-- **Step Out** is a placeholder single-step today (it stops, runs one instruction, and logs that proper step-out logic is TBD).
-- **Step Frame** stops the emulator, runs one full frame with no breaks, and leaves execution paused for inspection.
-- **Step 256** runs 256 single-instruction steps in succession so you can advance through short loops faster without resuming full speed.
-- **Restart** stops the hardware, resets/restarts the ROM, reloads it into memory, and then resumes running.
-- **Speed** dropdown allows you to control the emulation speed with the following options:
+### Debug Toobar
+
+The execution flow can be controlled via the standard VS Code debug toolbar as well as the extended toolbar in the emulator panel:
+
+- **Run / Pause**: to pause and continue the hardware simulation.
+- **Step Over**: it runs until the next instruction completes helping to step over the subroutines or conditional branches but honoring breakpoints along the path.
+- **Step Into**: a classic single-instruction step, halting immediately after execution.
+- **Step Out**: a placeholder. Not implemented yet.
+- **Step Frame**: stops the emulator, runs one full frame with no breaks, and leaves execution paused for inspection.
+- **Step 256**: runs 256 single-instruction steps in succession so you can advance through short loops faster without resuming full speed.
+- **Restart**: stops the hardware, resets/restarts the HW and loads and runs the ROM or FDD image depending on the availability.
+- **Speed**: dropdown allows you to control the emulation speed with the following options:
   - **0.1x** - Run at 1/10th normal speed (slow motion for debugging)
   - **1x** - Normal speed (default, 60 FPS)
   - **2x** - 2x normal speed
   - **4x** - 4x normal speed
   - **8x** - 8x normal speed
   - **Max** - Run as fast as possible with no frame delay
+- **Clear RAM Disk After Restart**: empties the RAM disk memory every restart. Convinient for testing.
 
-The Step buttons automatically disable whenever the emulator is running and re-enable when it pauses or hits a breakpoint so you cannot queue manual steps mid-run.
+## Extra VS Code editor helpers
+Additional editor helpers are available while debugging is paused.
 
-## Symbol hover hints while paused
-
+### Hover hints on labels/consts showing current values
 When the emulator is paused (manually or because it hit a breakpoint) you can hover any label or named constant in an `.asm` file that belongs to the loaded ROM and VS Code shows a tooltip with both the hexadecimal and decimal value. The hint data comes directly from the ROM’s `.debug.json` metadata, so it works for symbols introduced through `.include` chains as well. This is handy for confirming the current address/value of a label without opening the token file or dumping registers.
 
-When you hover over an assembled instruction (the mnemonic or register portion of the line—not the immediate literal) the extension now reads the underlying opcode bytes from the paused emulator, disassembles the operands, and shows the resolved value alongside the backing memory bytes. Example:
+### Instruction hover shows opcode bytes and decoded operands
+When you hover over an assembled instruction (the mnemonic and register portion of the line—not the immediate literal) the extension now reads the underlying opcode bytes from the paused emulator, disassembles the operands, and shows the resolved value alongside the backing memory bytes. Example:
 
-```
-lxi h, 0x40A0
-address: 0x0102/258
-memory: 0x21 0xA0 0x40
-```
-
-The tooltip length automatically matches the instruction length reported by `CPU.GetInstrLen`, so multi-byte opcodes such as `J*`, `C*`, `STA/LDA`, `IN/OUT`, and the byte-immediate ALU ops all display their encoded operands with no manual math.
-
+### Currently executed line highlight
 When execution pauses, the executing code line in the editor receives a translucent green highlight with a HW states. If no source mapping is available, the debugger highlights the last line in yellow printing the opcode executed.
 
+### Data directives highlight reads/writes with tooltips for live memory.
 Data directives (`DB`/`.byte`, `DW`/`.word`). The specific values are highlighted while paused (blue for reads, red for writes). Hovering a highlighted value shows the live memory at that address (hex + decimal) from the paused emulator.
 
-## Memory Dump panel
+### Live breakpoints synced to the paused emulator
+Adding, removing, or toggling breakpoints in the open ASM file syncs immediately to the running emulator.
 
+## Memory Dump panel
 The emulator view now embeds a **Memory Dump** panel under the frame preview. It streams a 16x16 hexdump that automatically tracks the current PC (both the hex bytes and ASCII column highlight the byte that will execute next). Uncheck **Follow PC** to freeze the window on a specific address, type any hex/decimal start value, or use the +/-0x10 and +/-0x100 buttons plus **Refresh** to nudge through RAM manually.
 
 ## Assembler
@@ -369,7 +301,7 @@ Typical use cases include guardrails for configuration constants, macro argument
 
 ```
 ImmutableConst = 1      ; Initialize constant
-                        ; Emits: 0x01
+            ; Emits: 0x01
 
 Counter .var 10         ; Initialize variable
 db Counter              ; Emits: 0x0A
@@ -451,6 +383,41 @@ Nested macros are supported (up to 32 levels deep), but you cannot open another 
 ; emits: 20 20 20 61 64 64 72 65 73 73 3A 20 20 20 31 0A 00
 ```
 
+## Dev's Pit
+
+### How to Compile this Extentsion
+
+- Compile TypeScript:
+
+```pwsh
+npm run compile
+```
+
+### How to Test the extension in the VS Code
+
+- Select the 'Launch Extension' in the debug launch list and press F5
+
+### Tests Suits
+
+To run all tests:
+```pwsh
+npm run test
+```
+
+#### Exclusive Tests
+
+* i8080 CPU test:
+
+```pwsh
+npm run test-emulator
+```
+Or launch the `npm: test-emulator` config.
+
+* Assembler Directive Tests:
+```pwsh
+npm run test-directives
+```
+Or launch the `npm: test-directives` config.
 
 ## Tools
 
@@ -470,3 +437,38 @@ Key switches:
 - `-i <file>` adds a host file into the image; repeat the flag for each additional file.
 - `-o <file>` writes the resulting `.fdd` image.
 - `-h` prints the usage summary.
+
+### assemble_one
+
+`assemble_one.ts` is a small CLI wrapper that assembles a single Intel 8080 source file without a `.project.json`. It is handy for quick experiments, CI checks, or integrating the assembler into other toolchains.
+
+Usage:
+```pwsh
+npm run compile   # ensure out/tools/assemble_one.js exists
+node .\out\tools\assemble_one.js --input src\file.asm --output out\file.rom [options]
+```
+
+Options:
+- `--input <file>` (required) path to the `.asm` source.
+- `--output <file>` (required) path to write the assembled ROM.
+- `--debug <file>` optional path for the `.debug.json` metadata.
+- `--origin <addr>` optional start address (`.org`) override in decimal, `0x`, or `$` hex.
+- `--encoding <ascii|screencodecommodore>` optional default `.encoding` for `.text`.
+- `--case <mixed|lower|upper>` optional case mode for screencode/ASCII.
+- `--printTokens` optional flag to dump labels and constants to stdout after assembly.
+- `-h`, `--help` show usage.
+
+Examples:
+```pwsh
+# Assemble with defaults
+node .\out\tools\assemble_one.js --input demo.asm --output demo.rom
+
+# Assemble with debug metadata and custom origin
+node .\out\tools\assemble_one.js --input demo.asm --output demo.rom --debug demo.debug.json --origin 0x100
+```
+
+Notes:
+- The same expression engine, directives, and warnings apply as in the extension-integrated assembler.
+- Includes are resolved relative to the input file. Recursive includes are supported up to 16 levels.
+- On errors the tool exits non-zero and prints diagnostics with file/line references.
+- The generated `.debug.json` can be loaded by the emulator/debugger for symbol navigation and breakpoints.
