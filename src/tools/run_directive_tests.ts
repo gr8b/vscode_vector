@@ -145,6 +145,38 @@ const tests: DirectiveTestCase[] = [
         }
     },
     {
+        name: '.incbin loads entire binary file',
+        sourceFile: 'incbin_basic.asm',
+        expect: {
+            bytes: [0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x00]
+        }
+    },
+    {
+        name: '.incbin loads portion of binary file with offset and length',
+        sourceFile: 'incbin_offset_length.asm',
+        expect: {
+            bytes: [0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC]
+        }
+    },
+    {
+        name: '.incbin surfaces missing files with error',
+        sourceFile: 'incbin_missing.asm',
+        expect: {
+            success: false,
+            errorsContains: ["Failed to read binary file 'does_not_exist.bin'"]
+        }
+    },
+    {
+        name: '.incbin handles hex notation for offset and length',
+        sourceFile: 'incbin_hex_format.asm',
+        expect: {
+            bytes: [0x99, 0xAA, 0xBB, 0xCC, 0xFF],
+            labels: {
+                after_incbin: 0x2004
+            }
+        }
+    },
+    {
         name: '.print accumulates formatted output',
         sourceFile: 'print_basic.asm',
         expect: {
