@@ -8,16 +8,13 @@ yarn-error.log*
 out/
 *.tsbuildinfo
 
-# VS Code workspace settings
-.vscode/
-
 # OS files
 .DS_Store
 Thumbs.db
 
 # Logs
 logs/
-*.log
+**/*.log
 
 # Generated ROM/binaries
 test.rom
@@ -30,9 +27,12 @@ test.rom
 # Frames output from run_frames tool
 frames_out/
 
-# Optional coverage
-coverage/
-
 # Temporary
 .tmp/
 test/core/
+
+# VSCode package vsix
+*.vsix
+
+temp/
+test/**/*.rom

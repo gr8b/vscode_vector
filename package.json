@@ -31,10 +31,6 @@
   },
   "activationEvents": [
     "onLanguage:asm",
-    "onCommand:devector.run",
-    "onCommand:devector.pause",
-    "onCommand:devector.resume",
-    "onCommand:devector.stepFrame",
     "onCommand:devector.compileProject",
     "onCommand:devector.createProject",
     "onDebug"
@@ -62,33 +58,12 @@
     ],
     "commands": [
       {
-        "command": "devector.run",
-        "title": "Run Devector Emulator"
-      },
-      {
-        "command": "devector.pause",
-        "title": "Pause Devector Emulator"
-      },
-      {
-        "command": "devector.resume",
-        "title": "Resume Devector Emulator"
-      },
-      {
-        "command": "devector.stepFrame",
-        "title": "Run one frame and Pause"
-      }
-      ,
-      {
-        "command": "devector.toggleBreakpoint",
-        "title": "Toggle Breakpoint"
-      },
-      {
         "command": "devector.createProject",
-        "title": "Create Devector Project"
+        "title": "Devector: Create Project"
       },
       {
         "command": "devector.compileProject",
-        "title": "Compile Devector Project"
+        "title": "Devector: Compile Project"
       }
     ],
     "keybindings": [

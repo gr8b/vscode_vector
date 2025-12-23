@@ -17,38 +17,25 @@ This repository contains a VS Code extension with key features: a two-pass Intel
 - [Tools](#tools)
 - [Implementation notes](#implementation-notes)
 
-## Quick start
+## Quick Start
 
-1. Install dependencies:
+1. Open the project folder in VS Code.
+2. Run **Devector: Create Project** to scaffold a new Vector 06c project.
+3. Build with **Devector: Compile Project**.
+4. Press **F5** to launch and debug in the emulator.
 
-```pwsh
-npm install
-```
+Tips:
+- If the emulator panel was closed, you may be prompted for the RAM disk image path.
+- With multiple projects, **Devector: Compile Project** and **F5** will ask which project to build/run.
 
-2. Build the tools (produces `out/`):
+Project artifacts:
+- `<project_name>.project.json` — project settings.
+- `<project_name>.debug.json` — debug metadata (tokens, labels, consts, breakpoints).
+- `<project_name>.rom` — Vector 06c executable loaded by the emulator.
+- `<project_name>.ram_disk.bin` — RAM disk image (all eight supported disks).
+- `<name>.fdd` — floppy disk image (usually 820 KB). Add `"fddPath": "./out/<your_fdd_name>.fdd"` to settings to auto-load it on the next run.
 
-```pwsh
-npm run compile
-```
-
-3. Build and test:
-
-```pwsh
-npm run test
-```
-
-## Test Suites
-
-### 1. Assembler directive tests
-
-```pwsh
-npm run test-directives
-```
-
-The command recompiles the TypeScript sources and executes every test case under `test/assembler/directives`, reporting a PASS/FAIL line for each directive scenario plus a summary total. The process exits with a non-zero status when a failure is detected, so it can plug directly into CI.
-Current coverage includes `.org`, `.align` (success + failure paths), `.if`/`.endif`, `.loop`/`.endloop` (standalone and inside macros), `.include` (flat + nested + missing-file errors), `.print`, `DS`, literal/binary/hex formats with expression evaluation, and both macro-bodied plus standalone local-label resolution. Add more fixture `.asm` files under `test/assembler/directives` and register them in `src/tools/run_directive_tests.ts` to grow the matrix.
-
-### 2. Emulator tests
+## 2. Emulator tests
 
 Run the i8080 CPU emulator test suite at any time:
 
@@ -78,28 +65,12 @@ Add more test `.asm` files under `.test/emulator/` and register them in `src/too
 - Number of instructions to execute
 - Expected register values, flag states, and/or memory contents
 
-## How to assemble and run
+## How to Compile this Extentsion
 
 - Compile TypeScript:
 
 ```pwsh
 npm run compile
-```
-
-- Assemble `test.asm` into `test.rom` (and write a token file `test.json` with labels):
-
-```pwsh
-node .\scripts\run-assembler.js
-```
-
-- Compile the active `test/project/*.project.json` configuration from VS Code via the **"Compile Vector06c Project"** command. The command locates the project JSON inside the root of `workspace`, reads its `main` ASM entry, and assembles it.
-- Project builds emit `<project-name>.rom` (and the matching `<project-name>.debug.json` tokens file) beside the `.project.json`, so the name field controls the output artifact names.
-- Adding or removing a breakpoint inside any `.asm` file automatically reruns the project compile so the ROM and breakpoint metadata stay in sync.
-
-- Run the external emulator (example path shown for convenience):
-
-```pwsh
-C:\Work\Programming\devector\bin\devector.exe .\test.rom
 ```
 
 ## Project Configuration
@@ -110,53 +81,33 @@ You can configure your project using a `.project.json` file. This file defines t
 
 ```json
 {
-    "name": "my_project",
-    "main": "main.asm",
-    "rom": "./out/game.rom",
-    "fdd": "./out/game.fdd",
-    "settings": {
-        "speed": 1.5
-    }
-}
-```
-```json
-{
-    "name": "my_project",
-    "main": "main.asm",
-    "rom": "./out/game.rom",
-    "fdd": "./out/game.fdd",
+    "name": "prg",
+    "asmPath": "prg_main.asm",
+    "debugPath": "prg.debug.json",
+    "romPath": "out\\prg.rom",
+    "fddPath": "out\\prg.fdd",
     "settings": {
         "speed": "max",
-        "fddPath": "./out/game_saved.fdd"
+        "viewMode": "noBorder",
+        "ramDiskPath": "out\\prg.ram_disk.bin"
     }
 }
 ```
 
 ### Fields
 
-- **name**: The name of the project.
-- **main**: The main assembly file to compile.
-- **rom**: The path to the output ROM file.
-- **fdd**: (Optional) The path to the FDD disk image to run. The emulator runs prefers fdd over rom if present a valid path.
-- **settings**: (Optional) Project-specific settings.
+- **name**: Project name.
+- **asmPath**: Entry assembly file to compile (e.g., `prg_main.asm`).
+- **debugPath**: Path for the generated debug metadata (e.g., `prg.debug.json`).
+- **romPath**: Output ROM path (e.g., `out\\prg.rom`).
+- **fddPath**: (Optional) FDD image to boot; takes precedence over `romPath` when valid.
+- **settings**: (Optional) Per-project emulator preferences (see below).
 
 ### Settings
 
-- **speed**: Controls the initial emulation speed.
-  - Values: `0.1`, `1`, `2`, `4`, `8`, or `"max"`.
-  - Default: `1` (normal speed).
-  - This setting is automatically updated when you change the speed in the emulator panel, persisting your preference across sessions.
-
-- **fddPath**: (Optional) Path to save FDD disk data for persistence across emulator restarts.
-  - When set, any writes to the FDD (floppy disk) during emulation are automatically saved to this file when the emulator closes.
-  - On the next run, if this saved file exists, it will be loaded instead of the original FDD file specified in the `fdd` field.
-  - Example: `"fddPath": "./out/saved_disk.fdd"`
-  - If not set, FDD changes are lost on each emulator restart.
-  - This allows you to preserve game saves, high scores, and other data written to the floppy disk.
-
-- **ramDiskData**: (Optional) Path to save RAM disk data for persistence across emulator restarts.
-  - When set, RAM disk contents are automatically saved to this file when the emulator closes and loaded on startup.
-  - Example: `"ramDiskData": "./out/ramdisk.bin"`
+- **speed**: Initial emulation speed (`0.1`, `1`, `2`, `4`, `8`, or `"max"`). Updated automatically when you change speed in the emulator panel.
+- **viewMode**: Emulator viewport mode (`"border"`, `"noBorder"`).
+- **ramDiskPath**: (Optional) RAM disk image path for persistence across emulator restarts.
 
 ## VS Code editor helpers
 
@@ -169,9 +120,9 @@ The bundled extension now exposes quality-of-life helpers whenever you edit `.as
 Launching the VS Code emulator panel loads the ROM and shows a compact toolbar on top of the frame preview. The buttons behave like classic debugger controls:
 
 - **Run / Pause** toggles the hardware thread. While running it reads “Pause”; hitting it stops execution, captures the current frame, and switches back to “Run”.
-- **Step Over** executes a single instruction after stopping the machine (currently a simple single-instruction step without temporary breakpoints).
+- **Step Over** runs until the next instruction completes, it effectively steps over the subroutines but honoring breakpoints along the path.
 - **Step Into** behaves like a classic single-instruction step, halting immediately after execution.
-- **Step Out** is a placeholder single-step today (it stops, runs one instruction, and logs that proper step-out logic is TBD).
+- **Step Out** is a placeholder now.
 - **Step Frame** stops the emulator, runs one full frame with no breaks, and leaves execution paused for inspection.
 - **Step 256** runs 256 single-instruction steps in succession so you can advance through short loops faster without resuming full speed.
 - **Restart** stops the hardware, resets/restarts the ROM, reloads it into memory, and then resumes running.
