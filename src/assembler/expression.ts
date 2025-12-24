@@ -166,7 +166,11 @@ function resolveSymbolValue(name: string, ctx: ExpressionEvalContext): number | 
 class ConditionExpressionParser {
   private index = 0;
 
-  constructor(private readonly tokens: ExprToken[], private readonly ctx: ExpressionEvalContext) {}
+  constructor(
+    private readonly tokens: ExprToken[],
+    private readonly ctx: ExpressionEvalContext,
+    private readonly exprText: string
+  ) {}
 
   parseExpression(allowEval: boolean): number {
     const value = this.parseLogicalOr(allowEval);
@@ -361,11 +365,11 @@ class ConditionExpressionParser {
 
   private parsePrimary(allowEval: boolean): number {
     const token = this.tokens[this.index];
-    if (!token) throw new Error('Unexpected end of expression');
+    if (!token) throw new Error(`Unexpected end of expression '${this.exprText}'`);
     if (token.type === 'paren' && token.value === '(') {
       this.index++;
       const value = this.parseLogicalOr(allowEval);
-      if (!this.matchParen(')')) throw new Error('Unmatched ( in expression');
+      if (!this.matchParen(')')) throw new Error(`Unmatched ( in expression '${this.exprText}'`);
       return allowEval ? value : 0;
     }
     if (token.type === 'number') {
@@ -376,13 +380,15 @@ class ConditionExpressionParser {
       this.index++;
       if (!allowEval) return 0;
       const resolved = resolveSymbolValue(token.name, this.ctx);
-      if (resolved === null) throw new Error(`Undefined symbol '${token.name}' in expression`);
+      if (resolved === null) {
+        throw new Error(`Undefined symbol '${token.name}' in expression '${this.exprText}'`);
+      }
       return resolved;
     }
     if (token.type === 'paren' && token.value === ')') {
-      throw new Error('Unmatched ) in expression');
+      throw new Error(`Unmatched ) in expression '${this.exprText}'`);
     }
-    throw new Error(`Unexpected token '${this.describeToken(token)}' in expression`);
+    throw new Error(`Unexpected token '${this.describeToken(token)}' in expression '${this.exprText}'`);
   }
 
   private matchOperator(op: string): boolean {
@@ -413,6 +419,6 @@ class ConditionExpressionParser {
 
 export function evaluateConditionExpression(expr: string, ctx: ExpressionEvalContext, allowEval = true): number {
   const tokens = tokenizeConditionExpression(expr);
-  const parser = new ConditionExpressionParser(tokens, ctx);
+  const parser = new ConditionExpressionParser(tokens, ctx, expr);
   return parser.parseExpression(allowEval);
 }

@@ -17,7 +17,7 @@ export function expandLoopDirectives(lines: string[], origins: SourceOrigin[], s
     return describeOrigin(origins[idx], idx + 1, sourcePath);
   }
 
-  function evaluateExpression(expr: string, idx: number, strict: boolean): number | null {
+  function evaluateExpression(expr: string, idx: number): number | null {
     const ctx: ExpressionEvalContext = {
       labels: dummyLabels,
       consts: constState,
@@ -28,7 +28,7 @@ export function expandLoopDirectives(lines: string[], origins: SourceOrigin[], s
     try {
       return evaluateConditionExpression(expr, ctx, true);
     } catch (err: any) {
-      if (strict) errors.push(`Failed to evaluate expression '${expr}' at ${describeLine(idx)}: ${err?.message || err}`);
+        errors.push(`Failed to evaluate expression '${expr}' at ${describeLine(idx)}: ${err?.message || err}`);
       return null;
     }
   }
@@ -38,7 +38,7 @@ export function expandLoopDirectives(lines: string[], origins: SourceOrigin[], s
     if (assignMatch) {
       const [, name, rhsRaw] = assignMatch;
       const rhs = rhsRaw.trim();
-      const val = evaluateExpression(rhs, idx, false);
+      const val = evaluateExpression(rhs, idx);
       if (val !== null && Number.isFinite(val)) constState.set(name, val);
       return;
     }
@@ -46,7 +46,7 @@ export function expandLoopDirectives(lines: string[], origins: SourceOrigin[], s
     if (equMatch) {
       const [, name, rhsRaw] = equMatch;
       const rhs = rhsRaw.trim();
-      const val = evaluateExpression(rhs, idx, false);
+      const val = evaluateExpression(rhs, idx);
       if (val !== null && Number.isFinite(val)) constState.set(name, val);
       return;
     }
@@ -94,7 +94,7 @@ export function expandLoopDirectives(lines: string[], origins: SourceOrigin[], s
         }
         let iterations = 0;
         if (expr.length) {
-          const evaluated = evaluateExpression(expr, i, true);
+          const evaluated = evaluateExpression(expr, i);
           if (evaluated !== null) {
             if (!Number.isFinite(evaluated)) errors.push(`.loop count at ${describeLine(i)} must be finite`);
             else {
