@@ -102,7 +102,7 @@ export function expandLoopDirectives(lines: string[], origins: SourceOrigin[], s
               if (truncated !== evaluated) {
                 errors.push(`.loop count at ${describeLine(i)} must be an integer (got ${evaluated})`);
               } else if (truncated < 0) {
-                errors.push(`.loop count at ${describeLine(i)} must be non-negative`);
+                errors.push(`.loop count at ${describeLine(i)} must be non-negative (got ${evaluated})`);
               } else if (truncated > LOOP_MAX_ITERATIONS) {
                 errors.push(`.loop count at ${describeLine(i)} exceeds max of ${LOOP_MAX_ITERATIONS}`);
               } else {

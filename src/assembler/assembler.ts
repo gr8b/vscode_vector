@@ -9,8 +9,6 @@ import {
 import {
   stripInlineComment,
   parseNumberFull,
-  parseAddressToken,
-  regCodes,
   describeOrigin
 } from './utils';
 
@@ -30,18 +28,15 @@ import {
   handleTextDirective,
   DirectiveContext
 } from './directives';
-import { handleIncbinFirstPass, handleIncbinSecondPass, IncbinContext } from './incbin';
+import { handleIncbinFirstPass,
+  handleIncbinSecondPass,
+  IncbinContext } from './incbin';
 import {
-  resolveAddressToken as resolveAddressTokenInstr,
-  encodeMVI,
-  encodeMOV,
-  encodeLXI,
-  encodeThreeByteAddress,
-  encodeImmediateOp,
-  encodeRegisterOp,
   InstructionContext
 } from './instructions';
-import { AssemblyEvalState, evaluateExpressionValue, processVariableAssignment } from './pass_helpers';
+import { AssemblyEvalState,
+  evaluateExpressionValue,
+  processVariableAssignment } from './pass_helpers';
 import { createAssembleAndWrite } from './assemble_write';
 import { AlignDirectiveEntry, handleAlignFirstPass, handleAlignSecondPass } from './align';
 import { handleOrgFirstPass, handleOrgSecondPass } from './org';

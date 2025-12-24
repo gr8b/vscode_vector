@@ -1,3 +1,5 @@
+import * as vscode from 'vscode';
+import * as fs from 'fs';
 import * as path from 'path';
 import { SourceOrigin, WordLiteralResult } from './types';
 
@@ -286,4 +288,32 @@ export function parseTextLiteralToBytes(part: string, encoding: TextEncodingType
   // Check if it's a single character in quotes (parseStringLiteral handles this)
   // If parseStringLiteral returned null, it's not a valid string/char literal
   return { error: `Invalid .text value '${trimmed}' - expected string or character literal` };
+}
+
+export function resolveIncludePath(includedFile: string, currentAsm?: string, mainAsm?: string)
+: string | undefined
+{
+  let resolved: string | undefined = includedFile;
+  // Try to resolve the include path
+  if (!path.isAbsolute(resolved)) {
+    // First try: resolve relative to the current file
+    const currentFileDir = path.dirname(currentAsm || '');
+    resolved = path.resolve(currentFileDir, includedFile);;
+    if (!fs.existsSync(resolved)) {
+      // Second try: resolve relative to the workspace root
+      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      resolved = path.resolve(root || '', includedFile);
+      if (!fs.existsSync(resolved)) {
+        // Third try: resolve relative to the main asm file (sourcePath)
+        resolved = mainAsm ?
+          path.resolve(path.dirname(mainAsm), includedFile) :
+          process.cwd();
+        if (!resolved || !fs.existsSync(resolved))
+        {
+          return resolved;
+        }
+      }
+    }
+  }
+  return resolved;
 }
