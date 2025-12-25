@@ -702,6 +702,18 @@ const tests: DirectiveTestCase[] = [
             bytes: [0x3E, 0x10, 0x06, 0x20, 0x0E, 0x30, 0xAA, 0xBB],
             noWarnings: true
         }
+    },
+    {
+        name: 'Multiline comments handle edge cases',
+        sourceFile: 'comment_multiline_edge_cases.asm',
+        expect: {
+            // db 0x01, 0x02
+            // mvi a, 0x03 = 0x3E, 0x03
+            // mvi b, 0x04 = 0x06, 0x04
+            // db 0x05, 0x06
+            bytes: [0x01, 0x02, 0x3E, 0x03, 0x06, 0x04, 0x05, 0x06],
+            noWarnings: true
+        }
     }
 ];
 
