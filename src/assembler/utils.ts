@@ -19,35 +19,31 @@ export function stripMultilineComments(source: string): string {
   let i = 0;
   let inString = false;
   let stringChar = '';
-  
+  let inComment = false;
+  let inLineComment = false;
+
   while (i < source.length) {
     const ch = source[i];
     const next = i + 1 < source.length ? source[i + 1] : '';
-    
-    // Helper function to count consecutive backslashes before position
-    const countBackslashes = (pos: number): number => {
-      let count = 0;
-      let j = pos - 1;
-      while (j >= 0 && source[j] === '\\') {
-        count++;
-        j--;
-      }
-      return count;
-    };
-    
-    // Handle string and character literals (both " and ')
-    if (ch === '"' || ch === '\'') {
-      // Check if this quote is escaped by counting backslashes
-      const backslashCount = countBackslashes(i);
-      const isEscaped = backslashCount % 2 === 1; // Odd number of backslashes means escaped
-      
-      if (!isEscaped) {
+
+    // Short-circuit if we're inside a line comment: copy until newline
+    if (inLineComment) {
+      result += ch;
+      if (ch === '\n') inLineComment = false;
+      i++;
+      continue;
+    }
+
+    // Toggle string/char literal state (respect escapes)
+    if (!inComment && (ch === '"' || ch === '\'')) {
+      let escaped = false;
+      let j = i - 1;
+      while (j >= 0 && source[j] === '\\') { escaped = !escaped; j--; }
+      if (!escaped) {
         if (!inString) {
-          // Start of string or character literal
           inString = true;
           stringChar = ch;
         } else if (ch === stringChar) {
-          // End of string or character literal
           inString = false;
           stringChar = '';
         }
@@ -56,39 +52,47 @@ export function stripMultilineComments(source: string): string {
       i++;
       continue;
     }
-    
-    // If we're inside a string or character literal, just copy the character
+
     if (inString) {
       result += ch;
       i++;
       continue;
     }
-    
-    // Check for start of multiline comment
-    if (ch === '/' && next === '*') {
-      // Find the end of the comment
-      let j = i + 2;
-      let foundEnd = false;
-      while (j < source.length) {
-        if (j + 1 < source.length && source[j] === '*' && source[j + 1] === '/') {
-          i = j + 2; // Skip past the closing */
-          foundEnd = true;
-          break;
-        }
-        j++;
-      }
-      // If we didn't find a closing */, skip to end (unterminated comment)
-      if (!foundEnd) {
-        i = source.length;
-      }
+
+    // Enter multiline comment
+    if (!inComment && ch === '/' && next === '*') {
+      inComment = true;
+      i += 2;
       continue;
     }
-    
-    // Regular character, just copy it
+
+    // Enter line comment (// or ;) to avoid mis-detecting quotes inside
+    if (!inComment && (ch === ';' || (ch === '/' && next === '/'))) {
+      inLineComment = true;
+      result += ch;
+      i += (ch === '/' ? 2 : 1);
+      continue;
+    }
+
+    // Exit comment
+    if (inComment && ch === '*' && next === '/') {
+      inComment = false;
+      i += 2;
+      continue;
+    }
+
+    if (inComment) {
+      // Preserve newlines so line numbers remain aligned after stripping
+      if (ch === '\n') result += '\n';
+      i++;
+      continue;
+    }
+
+    // If not in comment, copy char
     result += ch;
     i++;
   }
-  
+
   return result;
 }
 

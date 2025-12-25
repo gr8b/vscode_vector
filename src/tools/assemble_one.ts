@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 // require compiled assembler JS from out/assembler (keeps runtime same as before)
-const asm: any = require('../out/assembler');
+const asm: any = require('../assembler/assembler');
 
 const arg = process.argv[2] || path.join('test','asm_test_all_i8080_set','fill_erase_scr_set_pal.asm');
 const srcPath = path.resolve(arg);
