@@ -272,6 +272,18 @@ const tests: DirectiveTestCase[] = [
         }
     },
     {
+        name: 'Local constants scope like local labels',
+        sourceFile: 'const_local_scope.asm',
+        expect: {
+            bytes: [0x00, 0x40, 0x00, 0x80],
+            consts: {
+                CONST1: 0x2000,
+                '@data_end_0': 0x4000,
+                '@data_end_1': 0x8000
+            }
+        }
+    },
+    {
         name: 'Local labels resolve within their scope',
         sourceFile: 'local_labels.asm',
         expect: {

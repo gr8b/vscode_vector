@@ -330,6 +330,16 @@ EXT_LEN = 3
 WORD_LEN = 2
 ```
 
+Local constants: prefix with `@` to give a constant the same scoped resolution as local labels. The assembler picks the most recent `@name` defined at or before the reference within the current scope (file/macro/loop expansion). You can redefine the same local constant later; earlier references keep the earlier value, later references see the new one:
+
+```
+CONST1: = $2000
+@data_end: = CONST1 * 2   ; emits 0x4000 before end_label
+...
+end_label:
+@data_end: = CONST1 * 4   ; emits 0x8000 after end_label
+```
+
 - `.var Name value`: declares a mutable variable whose value can be reassigned later in the file (or inside macros). Unlike `=` or `EQU`, `.var` establishes an initial value but can be updated with either direct assignments (`Counter = Counter - 1`) or a subsequent `EQU`. The symbol participates in all expression contexts just like any other constant.
 
 ```

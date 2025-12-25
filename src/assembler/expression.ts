@@ -164,6 +164,7 @@ function resolveSymbolValue(name: string, ctx: ExpressionEvalContext): number | 
       else break;
     }
     const key = chosen.key;
+    if (ctx.consts.has(key)) return ctx.consts.get(key)!;
     if (ctx.labels.has(key)) return ctx.labels.get(key)!.addr;
     return null;
   }

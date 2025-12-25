@@ -129,6 +129,27 @@ export function assemble(
 
   const evalState: AssemblyEvalState = { labels, consts, localsIndex, scopes };
 
+  function allocateLocalKey(name: string, origin: SourceOrigin | undefined, fallbackLine: number, scopeKey: string): string {
+    const localName = name.slice(1);
+    let fileMap = localsIndex.get(scopeKey);
+    if (!fileMap) {
+      fileMap = new Map();
+      localsIndex.set(scopeKey, fileMap);
+    }
+
+    let arr = fileMap.get(localName);
+    if (!arr) {
+      arr = [];
+      fileMap.set(localName, arr);
+    }
+
+    const gid = globalLocalCounters.get(localName) || 0;
+    globalLocalCounters.set(localName, gid + 1);
+    const key = '@' + localName + '_' + gid;
+    arr.push({ key, line: origin ? origin.line : fallbackLine });
+    return key;
+  }
+
   function tryEvaluateConstant(rhs: string, lineIndex: number): { value: number | null; error?: string } {
     let val: number | null = parseNumberFull(rhs);
     if (val === null) {
@@ -301,71 +322,83 @@ export function assemble(
 
     // simple constant / EQU handling: "NAME = expr" or "NAME EQU expr"
     if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
-      const name = tokens[0].endsWith(':') ? tokens[0].slice(0, -1) : tokens[0];
+      const rawName = tokens[0].endsWith(':') ? tokens[0].slice(0, -1) : tokens[0];
       // Skip variable assignments in first pass (they'll be processed in second pass)
-      if (variables.has(name)) {
+      if (variables.has(rawName)) {
         continue;
       }
       const rhs = tokens.slice(2).join(' ').trim();
 
-      // Disallow reassignment before attempting resolution
-      if (consts.has(name) && !variables.has(name)) {
-        errors.push(`Cannot reassign constant '${name}' at ${i + 1} (use .var to create a variable instead)`);
+      const isLocal = rawName.startsWith('@');
+      const scopeKey = scopes[i];
+      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : rawName;
+
+      // Disallow reassignment for globals before attempting resolution
+      if (!isLocal && consts.has(storeName) && !variables.has(storeName)) {
+        errors.push(`Cannot reassign constant '${rawName}' at ${i + 1} (use .var to create a variable instead)`);
         continue;
       }
 
       const result = tryEvaluateConstant(rhs, i + 1);
       if (result.value !== null) {
-        consts.set(name, result.value);
-        constOrigins.set(name, { line: i + 1, src: origins[i]?.file || sourcePath });
+        consts.set(storeName, result.value);
+        constOrigins.set(storeName, { line: i + 1, src: origins[i]?.file || sourcePath });
       } else {
-        pendingConsts.push({ name, rhs, line: i + 1, origin: origins[i], originDesc });
+        pendingConsts.push({ name: storeName, rhs, line: i + 1, origin: origins[i], originDesc });
       }
       continue;
     }
-    const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:?\s*=\s*(.+)$/);
+    const assignMatch = line.match(/^([A-Za-z_@][A-Za-z0-9_@.]*)\s*:?\s*=\s*(.+)$/);
     if (assignMatch) {
-      const name = assignMatch[1];
+      const rawName = assignMatch[1];
       // Skip variable assignments in first pass
-      if (variables.has(name)) {
+      if (variables.has(rawName)) {
         continue;
       }
 
-      if (consts.has(name) && !variables.has(name)) {
-        errors.push(`Cannot reassign constant '${name}' at ${i + 1} (use .var to create a variable instead)`);
+      const isLocal = rawName.startsWith('@');
+      const scopeKey = scopes[i];
+      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : rawName;
+
+      if (!isLocal && consts.has(storeName) && !variables.has(storeName)) {
+        errors.push(`Cannot reassign constant '${rawName}' at ${i + 1} (use .var to create a variable instead)`);
         continue;
       }
 
       const rhs = assignMatch[2].trim();
       const result = tryEvaluateConstant(rhs, i + 1);
       if (result.value !== null) {
-        consts.set(name, result.value);
-        constOrigins.set(name, { line: i + 1, src: origins[i]?.file || sourcePath });
+        consts.set(storeName, result.value);
+        constOrigins.set(storeName, { line: i + 1, src: origins[i]?.file || sourcePath });
       } else {
-        pendingConsts.push({ name, rhs, line: i + 1, origin: origins[i], originDesc });
+        pendingConsts.push({ name: storeName, rhs, line: i + 1, origin: origins[i], originDesc });
       }
       continue;
     }
-    const equMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:?\s+EQU\s+(.+)$/i);
+    const equMatch = line.match(/^([A-Za-z_@][A-Za-z0-9_@.]*)\s*:?\s+EQU\s+(.+)$/i);
     if (equMatch) {
-      const name = equMatch[1];
+      const rawName = equMatch[1];
       // Skip variable assignments in first pass
-      if (variables.has(name)) {
+      if (variables.has(rawName)) {
         continue;
       }
 
-      if (consts.has(name) && !variables.has(name)) {
-        errors.push(`Cannot reassign constant '${name}' at ${i + 1} (use .var to create a variable instead)`);
+      const isLocal = rawName.startsWith('@');
+      const scopeKey = scopes[i];
+      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : rawName;
+
+      if (!isLocal && consts.has(storeName) && !variables.has(storeName)) {
+        errors.push(`Cannot reassign constant '${rawName}' at ${i + 1} (use .var to create a variable instead)`);
         continue;
       }
 
       const rhs = equMatch[2].trim();
       const result = tryEvaluateConstant(rhs, i + 1);
       if (result.value !== null) {
-        consts.set(name, result.value);
-        constOrigins.set(name, { line: i + 1, src: origins[i]?.file || sourcePath });
+        consts.set(storeName, result.value);
+        constOrigins.set(storeName, { line: i + 1, src: origins[i]?.file || sourcePath });
       } else {
-        pendingConsts.push({ name, rhs, line: i + 1, origin: origins[i], originDesc });
+        pendingConsts.push({ name: storeName, rhs, line: i + 1, origin: origins[i], originDesc });
       }
       continue;
     }
