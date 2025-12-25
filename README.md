@@ -15,6 +15,7 @@ This repository contains a VS Code extension with key features: a two-pass Intel
 - [Extra VS Code editor helpers](#extra-vs-code-editor-helpers)
 - [Memory Dump panel](#memory-dump-panel)
 - [Assembler](#assembler)
+  - [Comments](#comments)
   - [Expressions and Operators](#expressions-and-operators)
   - [Directives](#directives)
 - [Dev's Pit](#devs-pit)
@@ -141,6 +142,28 @@ Adding, removing, or toggling breakpoints in the open ASM file syncs immediately
 The emulator view now embeds a **Memory Dump** panel under the frame preview. It streams a 16x16 hexdump that automatically tracks the current PC (both the hex bytes and ASCII column highlight the byte that will execute next). Uncheck **Follow PC** to freeze the window on a specific address, type any hex/decimal start value, or use the +/-0x10 and +/-0x100 buttons plus **Refresh** to nudge through RAM manually.
 
 ## Assembler
+
+### Comments
+
+The assembler supports two comment styles:
+
+- **Single-line comments**: Start with `;` or `//` and continue to the end of the line.
+  ```asm
+  mvi a, 0x10  ; Load accumulator with 0x10
+  mvi b, 0x20  // Load register B with 0x20
+  ```
+
+- **Multi-line comments**: Enclosed between `/*` and `*/`, can span multiple lines or be used inline.
+  ```asm
+  /* This is a multi-line comment
+     that spans multiple lines
+     and is ignored by the assembler */
+  mvi a, 0x10
+  
+  mvi b, 0x20  /* inline multi-line comment */
+  ```
+
+Multi-line comments are stripped during preprocessing and work correctly with string literals, escaped characters, and can be placed anywhere in the code.
 
 ### Expressions and Operators
 
