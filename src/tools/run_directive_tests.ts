@@ -679,6 +679,96 @@ const tests: DirectiveTestCase[] = [
                 final_marker: 0x0305
             }
         }
+    },
+    {
+        name: 'Multiline comments /* */ are stripped correctly',
+        sourceFile: 'comment_multiline_basic.asm',
+        expect: {
+            bytes: [0x01, 0x02, 0x03, 0x04],
+            labels: {
+                start: 0x0100
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Multiline comments work with instructions',
+        sourceFile: 'comment_multiline_code.asm',
+        expect: {
+            // mvi a, 0x10 = 0x3E, 0x10
+            // mvi b, 0x20 = 0x06, 0x20
+            // mvi c, 0x30 = 0x0E, 0x30
+            // db 0xAA, 0xBB
+            bytes: [0x3E, 0x10, 0x06, 0x20, 0x0E, 0x30, 0xAA, 0xBB],
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Multiline comments handle edge cases',
+        sourceFile: 'comment_multiline_edge_cases.asm',
+        expect: {
+            // db 0x01, 0x02
+            // mvi a, 0x03 = 0x3E, 0x03
+            // mvi b, 0x04 = 0x06, 0x04
+            // db 0x05, 0x06
+            bytes: [0x01, 0x02, 0x3E, 0x03, 0x06, 0x04, 0x05, 0x06],
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Multiline comments respect string literals',
+        sourceFile: 'comment_multiline_strings.asm',
+        expect: {
+            // .text "This /* is not a comment */" = 27 bytes
+            // .text "Another string" = 14 bytes
+            // db 0x01, 0x02
+            // .text '*', '/' = 2 bytes
+            // db 0x03
+            bytes: [
+                0x54, 0x68, 0x69, 0x73, 0x20, 0x2F, 0x2A, 0x20,  // "This /* "
+                0x69, 0x73, 0x20, 0x6E, 0x6F, 0x74, 0x20, 0x61,  // "is not a"
+                0x20, 0x63, 0x6F, 0x6D, 0x6D, 0x65, 0x6E, 0x74,  // " comment"
+                0x20, 0x2A, 0x2F,                                // " */"
+                0x41, 0x6E, 0x6F, 0x74, 0x68, 0x65, 0x72, 0x20,  // "Another "
+                0x73, 0x74, 0x72, 0x69, 0x6E, 0x67,              // "string"
+                0x01, 0x02,                                      // db 0x01, 0x02
+                0x2A, 0x2F,                                      // '*', '/'
+                0x03                                             // db 0x03
+            ],
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Multiline comments handle escaped quotes correctly',
+        sourceFile: 'comment_multiline_escapes.asm',
+        expect: {
+            // .text "String with \" escaped quote" = 28 bytes (includes backslash and quote)
+            // .text 'Char with \' escaped quote' = 26 bytes
+            // db 0x01
+            // .text "Path: C:\\" = 10 bytes (C:\ and final backslash)
+            // db 0x02
+            // .text "Backslash \\ and quote" = 21 bytes
+            // db 0x03
+            bytes: [
+                0x53, 0x74, 0x72, 0x69, 0x6E, 0x67, 0x20, 0x77,  // "String w"
+                0x69, 0x74, 0x68, 0x20, 0x22, 0x20, 0x65, 0x73,  // "ith \" es"
+                0x63, 0x61, 0x70, 0x65, 0x64, 0x20, 0x71, 0x75,  // "caped qu"
+                0x6F, 0x74, 0x65,                                // "ote"
+                0x43, 0x68, 0x61, 0x72, 0x20, 0x77, 0x69, 0x74,  // "Char wit"
+                0x68, 0x20, 0x27, 0x20, 0x65, 0x73, 0x63, 0x61,  // "h ' esca"
+                0x70, 0x65, 0x64, 0x20, 0x71, 0x75, 0x6F, 0x74,  // "ped quot"
+                0x65,                                            // "e"
+                0x01,                                            // db 0x01
+                0x50, 0x61, 0x74, 0x68, 0x3A, 0x20, 0x43, 0x3A,  // "Path: C:"
+                0x5C,                                            // "\"
+                0x02,                                            // db 0x02
+                0x42, 0x61, 0x63, 0x6B, 0x73, 0x6C, 0x61, 0x73,  // "Backslas"
+                0x68, 0x20, 0x5C, 0x20, 0x61, 0x6E, 0x64, 0x20,  // "h \ and "
+                0x71, 0x75, 0x6F, 0x74, 0x65,                    // "quote"
+                0x03                                             // db 0x03
+            ],
+            noWarnings: true
+        }
     }
 ];
 

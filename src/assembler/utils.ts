@@ -13,6 +13,85 @@ function tryGetWorkspaceRoot(): string | undefined {
   }
 }
 
+export function stripMultilineComments(source: string): string {
+  // Remove /* */ style multiline comments while respecting strings and character literals
+  let result = '';
+  let i = 0;
+  let inString = false;
+  let stringChar = '';
+  
+  while (i < source.length) {
+    const ch = source[i];
+    const next = i + 1 < source.length ? source[i + 1] : '';
+    
+    // Helper function to count consecutive backslashes before position
+    const countBackslashes = (pos: number): number => {
+      let count = 0;
+      let j = pos - 1;
+      while (j >= 0 && source[j] === '\\') {
+        count++;
+        j--;
+      }
+      return count;
+    };
+    
+    // Handle string and character literals (both " and ')
+    if (ch === '"' || ch === '\'') {
+      // Check if this quote is escaped by counting backslashes
+      const backslashCount = countBackslashes(i);
+      const isEscaped = backslashCount % 2 === 1; // Odd number of backslashes means escaped
+      
+      if (!isEscaped) {
+        if (!inString) {
+          // Start of string or character literal
+          inString = true;
+          stringChar = ch;
+        } else if (ch === stringChar) {
+          // End of string or character literal
+          inString = false;
+          stringChar = '';
+        }
+      }
+      result += ch;
+      i++;
+      continue;
+    }
+    
+    // If we're inside a string or character literal, just copy the character
+    if (inString) {
+      result += ch;
+      i++;
+      continue;
+    }
+    
+    // Check for start of multiline comment
+    if (ch === '/' && next === '*') {
+      // Find the end of the comment
+      let j = i + 2;
+      let foundEnd = false;
+      while (j < source.length) {
+        if (j + 1 < source.length && source[j] === '*' && source[j + 1] === '/') {
+          i = j + 2; // Skip past the closing */
+          foundEnd = true;
+          break;
+        }
+        j++;
+      }
+      // If we didn't find a closing */, skip to end (unterminated comment)
+      if (!foundEnd) {
+        i = source.length;
+      }
+      continue;
+    }
+    
+    // Regular character, just copy it
+    result += ch;
+    i++;
+  }
+  
+  return result;
+}
+
 export function stripInlineComment(line: string): string {
   return line.replace(/\/\/.*$|;.*$/, '');
 }
