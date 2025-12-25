@@ -26,7 +26,9 @@ export function processIncludes(
 
   const outLines: string[] = [];
   const origins: Array<{ file?: string; line: number }> = [];
-  const srcLines = content.split(/\r?\n/);
+  // Strip multiline comments before splitting into lines
+  const cleanedContent = ext_utils.stripMultilineComments(content);
+  const srcLines = cleanedContent.split(/\r?\n/);
 
   for (let li = 0; li < srcLines.length; li++) {
     const raw = srcLines[li];
@@ -77,7 +79,9 @@ export function collectIncludeFiles(
     throw new Error(`Include recursion too deep (>${MAX_INCLUDE_DEPTH}) when processing ${file || '<memory>'}`);
   }
 
-  const srcLines = content.split(/\r?\n/);
+  // Strip multiline comments before splitting into lines
+  const cleanedContent = ext_utils.stripMultilineComments(content);
+  const srcLines = cleanedContent.split(/\r?\n/);
   for (let li = 0; li < srcLines.length; li++) {
     const raw = srcLines[li];
     const trimmed = raw.replace(/\/\/.*$|;.*$/, '').trim();

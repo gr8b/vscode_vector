@@ -679,6 +679,29 @@ const tests: DirectiveTestCase[] = [
                 final_marker: 0x0305
             }
         }
+    },
+    {
+        name: 'Multiline comments /* */ are stripped correctly',
+        sourceFile: 'comment_multiline_basic.asm',
+        expect: {
+            bytes: [0x01, 0x02, 0x03, 0x04],
+            labels: {
+                start: 0x0100
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Multiline comments work with instructions',
+        sourceFile: 'comment_multiline_code.asm',
+        expect: {
+            // mvi a, 0x10 = 0x3E, 0x10
+            // mvi b, 0x20 = 0x06, 0x20
+            // mvi c, 0x30 = 0x0E, 0x30
+            // db 0xAA, 0xBB
+            bytes: [0x3E, 0x10, 0x06, 0x20, 0x0E, 0x30, 0xAA, 0xBB],
+            noWarnings: true
+        }
     }
 ];
 

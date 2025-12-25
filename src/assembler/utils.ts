@@ -13,6 +13,11 @@ function tryGetWorkspaceRoot(): string | undefined {
   }
 }
 
+export function stripMultilineComments(source: string): string {
+  // Remove /* */ style multiline comments
+  return source.replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
 export function stripInlineComment(line: string): string {
   return line.replace(/\/\/.*$|;.*$/, '');
 }
