@@ -249,7 +249,7 @@ export function assemble(
 
     // simple constant / EQU handling: "NAME = expr" or "NAME EQU expr"
     if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
-      const name = tokens[0];
+      const name = tokens[0].endsWith(':') ? tokens[0].slice(0, -1) : tokens[0];
       // Skip variable assignments in first pass (they'll be processed in second pass)
       if (variables.has(name)) {
         continue;
@@ -282,7 +282,7 @@ export function assemble(
       }
       continue;
     }
-    const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+    const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:?\s*=\s*(.+)$/);
     if (assignMatch) {
       const name = assignMatch[1];
       // Skip variable assignments in first pass
@@ -316,7 +316,7 @@ export function assemble(
       }
       continue;
     }
-    const equMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+EQU\s+(.+)$/i);
+    const equMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:?\s+EQU\s+(.+)$/i);
     if (equMatch) {
       const name = equMatch[1];
       // Skip variable assignments in first pass
@@ -608,8 +608,10 @@ export function assemble(
     const tokenizedSecond = tokenize(line);
     const tokens = tokenizedSecond.tokens;
     const tokenOffsets = tokenizedSecond.offsets;
+    let leadingLabel: string | null = null;
     if (!tokens.length) continue;
     if (tokens[0].endsWith(':')) {
+      leadingLabel = tokens[0].slice(0, -1);
       tokens.shift();
       tokenOffsets.shift();
       if (!tokens.length) { map[srcLine] = addr; continue; }
@@ -623,18 +625,23 @@ export function assemble(
 
     // Process variable assignments in second pass, but skip constant assignments
     if (tokens.length >= 3 && (tokens[1] === '=' || tokens[1].toUpperCase() === 'EQU')) {
-      const name = tokens[0];
+      const name = leadingLabel ?? tokens[0];
       if (variables.has(name)) {
-        // This is a variable assignment - process it
         const rhs = tokens.slice(2).join(' ').trim();
         processVariableAssignment(name, rhs, srcLine, originDesc, evalState, errors);
       }
-      // Skip in second pass (constants were already processed in first pass)
       continue;
     }
-    if (/^[A-Za-z_][A-Za-z0-9_]*\s*=/.test(line) || /^[A-Za-z_][A-Za-z0-9_]*\s+EQU\b/i.test(line)) {
-      // Check if this is a variable assignment
-      const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*(?:=|EQU)\s*(.+)$/i);
+    if (leadingLabel && tokens.length >= 1 && (tokens[0] === '=' || tokens[0].toUpperCase() === 'EQU')) {
+      const name = leadingLabel;
+      if (variables.has(name)) {
+        const rhs = tokens.slice(1).join(' ').trim();
+        processVariableAssignment(name, rhs, srcLine, originDesc, evalState, errors);
+      }
+      continue;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_]*\s*:?\s*=/.test(line) || /^[A-Za-z_][A-Za-z0-9_]*\s*:?\s+EQU\b/i.test(line)) {
+      const assignMatch = line.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:?\s*(?:=|EQU)\s*(.+)$/i);
       if (assignMatch) {
         const name = assignMatch[1];
         if (variables.has(name)) {

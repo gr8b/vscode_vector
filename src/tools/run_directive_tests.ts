@@ -251,6 +251,13 @@ const tests: DirectiveTestCase[] = [
         }
     },
     {
+        name: 'Constants allow label-style syntax with colon',
+        sourceFile: 'const_colon_equ.asm',
+        expect: {
+            bytes: [0x09]
+        }
+    },
+    {
         name: 'Local labels resolve within their scope',
         sourceFile: 'local_labels.asm',
         expect: {
