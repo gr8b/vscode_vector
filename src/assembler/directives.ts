@@ -9,7 +9,7 @@ import {
   TextCaseType,
   parseTextLiteralToBytes
 } from './utils';
-import { evaluateConditionExpression } from './expression';
+import { evaluateExpression } from './expression';
 import { argsAfterToken } from './common';
 
 export type DirectiveContext = {
@@ -57,13 +57,13 @@ export function handleIfDirective(
   let conditionResult = false;
   if (!parentActive) {
     try {
-      evaluateConditionExpression(expr, exprCtx, false);
+      evaluateExpression(expr, exprCtx, false);
     } catch (err: any) {
       ctx.errors.push(`Failed to parse .if expression at ${originDesc}: ${err?.message || err}`);
     }
   } else {
     try {
-      const value = evaluateConditionExpression(expr, exprCtx, true);
+      const value = evaluateExpression(expr, exprCtx, true);
       conditionResult = value !== 0;
     } catch (err: any) {
       ctx.errors.push(`Failed to evaluate .if at ${originDesc}: ${err?.message || err}`);
@@ -142,7 +142,7 @@ export function handlePrintDirective(
     }
 
     try {
-      const value = evaluateConditionExpression(part, exprCtx, true);
+      const value = evaluateExpression(part, exprCtx, true);
       fragments.push(String(value));
     } catch (err: any) {
       ctx.errors.push(`Failed to evaluate .print expression '${part}' at ${originDesc}: ${err?.message || err}`);
@@ -204,7 +204,7 @@ export function handleErrorDirective(
     }
 
     try {
-      const value = evaluateConditionExpression(part, exprCtx, true);
+      const value = evaluateExpression(part, exprCtx, true);
       fragments.push(String(value));
     } catch (err: any) {
       ctx.errors.push(`Failed to evaluate .error expression '${part}' at ${originDesc}: ${err?.message || err}`);

@@ -1,4 +1,4 @@
-import { evaluateConditionExpression } from './expression';
+import { evaluateExpression } from './expression';
 import { parseNumberFull } from './utils';
 import { ExpressionEvalContext, LocalLabelScopeIndex } from './types';
 
@@ -29,7 +29,7 @@ export function evaluateExpressionValue(
 ): { value: number | null; error?: string } {
   const ctx = buildEvalContext(state, lineIndex);
   try {
-    const value = evaluateConditionExpression(expr, ctx, true);
+    const value = evaluateExpression(expr, ctx, true);
     return { value };
   } catch (err: any) {
     return { value: null, error: `${errorLabel}: ${err?.message || err}` };
@@ -53,7 +53,7 @@ export function processVariableAssignment(
   if (val === null) {
     const ctx: ExpressionEvalContext = buildEvalContext(state, srcLine);
     try {
-      val = evaluateConditionExpression(rhs, ctx, true);
+      val = evaluateExpression(rhs, ctx, true);
     } catch (err: any) {
       errors.push(`Failed to evaluate expression '${rhs}' for ${name} at ${originDesc}: ${err?.message || err}`);
       val = null;

@@ -1,7 +1,17 @@
-import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import { SourceOrigin, WordLiteralResult } from './types';
+
+// VS Code API is optional at runtime (CLI/tests). Attempt to load lazily.
+function tryGetWorkspaceRoot(): string | undefined {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const vscode = require('vscode');
+    return vscode.workspace?.workspaceFolders?.[0]?.uri?.fsPath;
+  } catch (_e) {
+    return undefined;
+  }
+}
 
 export function stripInlineComment(line: string): string {
   return line.replace(/\/\/.*$|;.*$/, '');
@@ -300,8 +310,8 @@ export function resolveIncludePath(includedFile: string, currentAsm?: string, ma
     const currentFileDir = path.dirname(currentAsm || '');
     resolved = path.resolve(currentFileDir, includedFile);;
     if (!fs.existsSync(resolved)) {
-      // Second try: resolve relative to the workspace root
-      const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      // Second try: resolve relative to the workspace root (if VS Code API is available)
+      const root = tryGetWorkspaceRoot();
       resolved = path.resolve(root || '', includedFile);
       if (!fs.existsSync(resolved)) {
         // Third try: resolve relative to the main asm file (sourcePath)

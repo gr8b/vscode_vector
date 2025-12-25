@@ -6,7 +6,7 @@ import {
   parseAddressToken,
   describeOrigin
 } from './utils';
-import { evaluateConditionExpression } from './expression';
+import { evaluateExpression } from './expression';
 
 export type InstructionContext = {
   labels: Map<string, { addr: number; line: number; src?: string }>;
@@ -99,7 +99,7 @@ export function resolveAddressToken(
 
       if (val === null) {
         try {
-          val = evaluateConditionExpression(tok, exprCtx, true);
+          val = evaluateExpression(tok, exprCtx, true);
         } catch (err) {
           val = null;
         }
@@ -137,7 +137,7 @@ export function resolveAddressToken(
 
   // final fallback: evaluate full expression
   try {
-    const value = evaluateConditionExpression(s, exprCtx, true);
+    const value = evaluateExpression(s, exprCtx, true);
     return value;
   } catch (err) {
     // swallow so caller can emit a contextual error
@@ -181,7 +181,7 @@ export function encodeMVI(
       lineIndex: srcLine
     };
     try {
-      full = evaluateConditionExpression(rawVal, exprCtx, true);
+      full = evaluateExpression(rawVal, exprCtx, true);
     } catch (err: any) {
       // Fall through to error below
     }
@@ -275,7 +275,7 @@ export function encodeLXI(
       lineIndex: srcLine
     };
     try {
-      target = evaluateConditionExpression(val, exprCtx, true);
+      target = evaluateExpression(val, exprCtx, true);
     } catch (err: any) {
       ctx.errors.push(`Bad LXI value '${val}' at ${srcLine}: ${err?.message || err}`);
       return 0;
@@ -348,7 +348,7 @@ export function encodeImmediateOp(
       lineIndex: srcLine
     };
     try {
-      full = evaluateConditionExpression(valTok, exprCtx, true);
+      full = evaluateExpression(valTok, exprCtx, true);
     } catch (err: any) {
       ctx.errors.push(`Bad immediate '${valTok}' at ${srcLine}: ${err?.message || err}`);
       return 0;

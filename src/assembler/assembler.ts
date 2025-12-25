@@ -12,7 +12,7 @@ import {
   describeOrigin
 } from './utils';
 
-import { evaluateConditionExpression } from './expression';
+import { evaluateExpression } from './expression';
 import { prepareMacros, expandMacroInvocations } from './macro';
 import { expandLoopDirectives } from './loops';
 import { processIncludes } from './includes';
@@ -560,13 +560,13 @@ export function assemble(
       let conditionResult = false;
       if (!parentActive) {
         try {
-          evaluateConditionExpression(expr, ctx, false);
+          evaluateExpression(expr, ctx, false);
         } catch (err: any) {
           errors.push(`Failed to parse .if expression at ${originDesc}: ${err?.message || err}`);
         }
       } else {
         try {
-          const value = evaluateConditionExpression(expr, ctx, true);
+          const value = evaluateExpression(expr, ctx, true);
           conditionResult = value !== 0;
         } catch (err: any) {
           errors.push(`Failed to evaluate .if at ${originDesc}: ${err?.message || err}`);

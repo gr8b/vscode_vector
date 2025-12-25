@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import { ExpressionEvalContext, SourceOrigin } from './types';
 import { argsAfterToken } from './common';
-import { evaluateConditionExpression } from './expression';
+import { evaluateExpression } from './expression';
 import * as ext_utils from './utils';
 
 export type IncbinContext = {
@@ -57,7 +57,7 @@ function parseIncbinParams(
   const currentAsm = origin?.file;
   const incPath: string | undefined = ext_utils.resolveIncludePath(inc, currentAsm, sourcePath);
   if (!incPath) {
-    ctx.errors.push(`Failed to include '${inc}' at ${currentAsm || '<memory>'}:${srcLine + 1} - ${incPath || inc}`);
+    ctx.errors.push(`Failed to read binary file '${inc}' for .incbin at ${originDesc} - file not found`);
     return null;
   }
 
@@ -66,7 +66,8 @@ function parseIncbinParams(
     fileData = fs.readFileSync(incPath!);
   } catch (err) {
     const em = err && (err as any).message ? (err as any).message : String(err);
-    ctx.errors.push(`Failed to read binary file '${incPath!}' for .incbin at ${originDesc} - ${em}`);
+    const pathNote = incPath && incPath !== inc ? `${incPath}: ` : '';
+    ctx.errors.push(`Failed to read binary file '${inc}' for .incbin at ${originDesc} - ${pathNote}${em}`);
     return null;
   }
 
@@ -85,7 +86,7 @@ function parseIncbinParams(
   if (args.length >= 2) {
     const offsetArg = args[1].trim();
     try {
-      offset = evaluateConditionExpression(offsetArg, exprCtx, true);
+      offset = evaluateExpression(offsetArg, exprCtx, true);
       if (offset < 0 || offset > fileData.length) {
         ctx.errors.push(`Invalid offset ${offset} for .incbin at ${originDesc} - must be between 0 and ${fileData.length}`);
         return null;
@@ -99,7 +100,7 @@ function parseIncbinParams(
   if (args.length >= 3) {
     const lengthArg = args[2].trim();
     try {
-      length = evaluateConditionExpression(lengthArg, exprCtx, true);
+      length = evaluateExpression(lengthArg, exprCtx, true);
       if (length < 0 || offset + length > fileData.length) {
         ctx.errors.push(`Invalid length ${length} for .incbin at ${originDesc} - offset + length exceeds file size`);
         return null;

@@ -1,7 +1,7 @@
 import { ensureImmediateRange, InstructionContext, resolveAddressToken } from "./instructions";
 import { INSTR_SIZES } from "./first_pass_instr";
 import { ExpressionEvalContext } from "./types";
-import { evaluateConditionExpression } from "./expression";
+import { evaluateExpression } from "./expression";
 
 export const INSTR_OPCODES: Record<string, number | Record<string, number | Record<string, number>>> = {
   'NOP': 0x00,
@@ -122,7 +122,7 @@ export function instructionEncoding(
   };
   let full: number | null = null;
   try {
-    full = evaluateConditionExpression(rawVal, exprCtx, true);
+    full = evaluateExpression(rawVal, exprCtx, true);
   } catch (err: any) {
     // Fall through to error below
   }

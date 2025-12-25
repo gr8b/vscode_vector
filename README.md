@@ -16,6 +16,7 @@ This repository contains a VS Code extension with key features: a two-pass Intel
 - [Memory Dump panel](#memory-dump-panel)
 - [Assembler](#assembler)
   - [Expressions and Operators](#expressions-and-operators)
+  - [Directives](#directives)
 - [Dev's Pit](#devs-pit)
   - [How to Compile this Extentsion](#how-to-compile-this-extentsion)
   - [How to Test the extension in the VS Code](#how-to-test-the-extension-in-the-vs-code)
@@ -164,8 +165,8 @@ The assembler supports a rich expression system used throughout directives (`.if
 | `+` | Addition | `Value + 10` |
 | `-` | Subtraction | `EndAddr - StartAddr` |
 | `*` | Multiplication | `Count * 2` |
-| `/` | Division | `Total / 4` |
-| `%` | Modulo (remainder) | `Offset % 256` |
+| `/` | Integer division (truncates toward zero) | `Total / 4`, `-5 / 2` → `-2` |
+| `%` | Modulo (integer remainder) | `Offset % 256`, `14 % 4` → `2` |
 
 **Comparison Operators**
 
@@ -241,20 +242,15 @@ Expressions can reference:
 11. Logical AND: `&&`
 12. Logical OR: `||`
 
+### Directives
 - `.org` directive: supported (decimal, `0x..`, or `$..`). Example: `.org 0x100`.
 
-- `.include` directive: include another file inline using `.include "file.asm"` or `.include 'file.asm'`. Includes are resolved relative to the including file and support recursive expansion up to 16 levels.
+- `.include` directive: include another file inline using `.include "file.asm"` or `.include 'file.asm'`. Includes can be relative paths.In that case they are resolved relative to the including file, the main asm file, or the workspace directory. Includes support recursive expansion up to 16 levels.
 
-- Origins mapping: when using `.include`, the assembler records the original file and line for each expanded line. Errors and warnings reference the original filename and line number and print the offending source line plus a `file:///` link.
+- `.incbin` directive: include raw bytes from an external file at the current address. Syntax: `.incbin "path"[ , offset[, length]]`. Paths resolve like `.include`. `offset` and `length` are optional expressions (decimal, hex, or binary); omit them to start at 0 and read the entire file.
 
-- Tokens file: the assembler writes a debug JSON alongside the ROM (e.g., `myproject.debug.json`) containing `labels` with addresses (hex), and the original `src` basename and `line` where each label was defined. This is useful for setting breakpoints by name in the emulator/debugger.
-  - Note: When compiling through the VS Code extension `devector.compileProject` command, the extension also appends a `breakpoints` section to the tokens JSON that records per-file breakpoints (line numbers, enabled status, and label/addr where available) discovered in the editor across the main file and recursive includes.
-  - Breakpoints can be toggled only on meaningful lines (labels or instructions). Empty lines, pure comment lines, or lines containing compiler commands `.<cmd>` are ignored when you click the gutter or press `F9`.
-
-- Warnings for immediates/addresses: if an immediate or address exceeds the instruction width (8-bit or 16-bit), the assembler emits a warning and truncates the value to the appropriate width. These are currently non-fatal warnings.
-
-- Diagnostics: invalid mnemonics or bad operands are reported as errors with file/line and the offending source text. The assembler rejects invalid operations such as `MOV M,M`.
 - `.macro` / `.endmacro`: build parameterized macros (with defaults, nested calls, and per-invocation label namespaces) that expand inline before assembly.
+
 - `.if` / `.endif`: wrap any sequence of source lines in a conditional block that assembles only when its expression evaluates to non-zero. You can nest `.if` directives freely, and the parser short-circuits inactive branches so forward references inside skipped blocks do not trigger errors. The argument may be a single numeric/boolean literal or any full expression evaluated with the rules below. Expressions support decimal/hex/binary literals, character constants, symbol names (labels, constants, `@local` labels), arithmetic (`+ - * / % << >>`), comparisons (`== != < <= > >=`), bitwise logic (`& | ^ ~`), and boolean operators (`! && ||`). Example:
 
 ```
@@ -265,6 +261,7 @@ Value = 3
   sta $d020
 .endif
 ```
+
 - `.loop` / `.endloop`: repeat a block of source lines `LoopCount` times (maximum per loop: 100,000). Loop counts are evaluated with the same expression engine as `.if`, so you can reference previously defined constants or simple expressions. Loop bodies can nest other `.loop` or `.if` blocks, and any constant assignments inside the block execute on each iteration because the assembler expands the body inline:
 
 ```
@@ -278,6 +275,7 @@ Step  = 4
 ```
 
 The example above emits `Value` three times (0, 1, 2) and leaves `Value` set to 3 for subsequent code.
+
 - `.print`: emit compile-time diagnostics to the console during the second pass. Arguments are comma-separated and can mix string literals (`"PC="`), numeric literals, labels, or arbitrary expressions. Each argument is evaluated with the same expression engine as `.if`, so you can dump intermediate values or addresses while assembling:
 
 ```
@@ -286,6 +284,7 @@ The example above emits `Value` three times (0, 1, 2) and leaves `Value` set to 
 ```
 
 Strings honor standard escapes (`\n`, `\t`, `\"`, etc.). Non-string arguments are printed in decimal.
+
 - `.error`: immediately halt the second pass with a fatal diagnostic that uses the same argument rules as `.print`. Use it for compile-time validation inside conditionals or macros. Arguments can be strings, numbers, labels, or expressions, separated by commas. When the directive executes the assembler stops and surfaces the concatenated message to the user. Because inactive `.if` blocks are skipped during expansion, `.error` calls inside false branches never trigger:
 
 ```
@@ -297,6 +296,7 @@ MAX_SIZE = 100
 ```
 
 Typical use cases include guardrails for configuration constants, macro argument validation, and short-circuiting builds when a derived value falls outside a legal range.
+
 - `.var Name value`: declares a mutable variable whose value can be reassigned later in the file (or inside macros). Unlike `=` or `EQU`, `.var` establishes an initial value but can be updated with either direct assignments (`Counter = Counter - 1`) or a subsequent `EQU`. The symbol participates in all expression contexts just like any other constant.
 
 ```
@@ -325,6 +325,7 @@ AlignedLabel:
 ```
 
 `AlignedLabel` is assigned the aligned address ($110) and the gap between `$103` and `$10F` is filled with zeros.
+
 - `.word value[, values...]`: emit one or more 16-bit words at the current address. Values may be decimal, hexadecimal (`0x`/`$`), or binary (`b`/`%`) literals. Negative decimal literals are allowed down to -0x7FFF (15-bit magnitude) and are encoded using two's complement. Each value is written little-endian (low byte first). Example:
 
 ```
@@ -375,6 +376,7 @@ Nested macros are supported (up to 32 levels deep), but you cannot open another 
 .text "@AB"                  ; emits: 0x00, 0x01, 0x02
 ```
 
+---
 - `.text value[, values...]`: emits bytes from comma-separated string or character literals using the current `.encoding` settings. Strings honor standard escapes like `\n`, `\t`, `\"`, etc. Example:
 
 ```

@@ -5,7 +5,7 @@ import {
   describeOrigin,
   splitTopLevelArgs
 } from './utils';
-import { evaluateConditionExpression } from './expression';
+import { evaluateExpression } from './expression';
 import { argsAfterToken } from './common';
 
 export type DataContext = {
@@ -43,7 +43,7 @@ export function handleDB(
         lineIndex: srcLine
       };
       try {
-        val = evaluateConditionExpression(p, exprCtx, true);
+        val = evaluateExpression(p, exprCtx, true);
       } catch (err: any) {
         ctx.errors.push(`Bad ${op} value '${p}' at ${srcLine}: ${err?.message || err}`);
         val = 0;
@@ -86,16 +86,27 @@ export function handleDW(
 
   let emitted = 0;
   for (const part of parts) {
+    let value: number | null = null;
     const parsed = parseWordLiteral(part);
-    let value = 0;
 
     if ('error' in parsed) {
-      ctx.errors.push(`${parsed.error} at ${originDesc}`);
+      const exprCtx: ExpressionEvalContext = {
+        labels: ctx.labels,
+        consts: ctx.consts,
+        localsIndex: ctx.localsIndex,
+        scopes: ctx.scopes,
+        lineIndex: srcLine
+      };
+      try {
+        value = evaluateExpression(part, exprCtx, true) & 0xffff;
+      } catch (err: any) {
+        ctx.errors.push(`Bad ${op} value '${part}' at ${originDesc}: ${err?.message || err}`);
+      }
     } else {
       value = parsed.value & 0xffff;
     }
 
-    if (out) {
+    if (out && value !== null) {
       out.push(value & 0xff);
       out.push((value >> 8) & 0xff);
     }

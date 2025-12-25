@@ -528,6 +528,62 @@ const tests: DirectiveTestCase[] = [
         }
     },
     {
+        name: 'Binary literals with relational and shift operators',
+        sourceFile: 'binary_shift_relational.asm',
+        expect: {
+            bytes: [0x01, 0x00, 0x00, 0x09, 0x90, 0x00],
+            consts: {
+                CONST1: 0x03
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Division truncates to integer',
+        sourceFile: 'division_integer.asm',
+        expect: {
+            bytes: [0x02, 0xFE, 0x02, 0x00],
+            consts: {
+                CONST1: 2
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Modulo operator emits integer remainder',
+        sourceFile: 'modulo_expression.asm',
+        expect: {
+            bytes: [0x01, 0x02, 0x34, 0x00, 0x05],
+            consts: {
+                VAL: 1
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Binary literals allowed in constant expressions',
+        sourceFile: 'binary_const_expression.asm',
+        expect: {
+            bytes: [0xFA],
+            consts: {
+                MASK: 0xF0,
+                CONST: 0xFA
+            },
+            noWarnings: true
+        }
+    },
+    {
+        name: 'Binary literals allowed in .var initialization',
+        sourceFile: 'binary_var_expression.asm',
+        expect: {
+            bytes: [0x3F, 0x4F],
+            consts: {
+                Value: 0x4F
+            },
+            noWarnings: true
+        }
+    },
+    {
         name: '.var creates a variable with initial value',
         sourceFile: 'var_basic.asm',
         expect: {

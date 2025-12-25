@@ -53,6 +53,15 @@ function tokenizeConditionExpression(expr: string): ExprToken[] {
       continue;
     }
     const two = expr.slice(i, i + 2);
+    if (ch === '%' && /[01_]/.test(expr[i + 1] || '')) {
+      let j = i + 1;
+      while (j < expr.length && /[01_]/.test(expr[j]!)) j++;
+      if (j === i + 1) throw new Error('Malformed binary literal in expression');
+      const value = parseInt(expr.slice(i + 1, j).replace(/_/g, ''), 2);
+      tokens.push({ type: 'number', value });
+      i = j;
+      continue;
+    }
     if (MULTI_CHAR_OPERATORS.includes(two)) {
       tokens.push({ type: 'operator', op: two });
       i += 2;
@@ -101,15 +110,6 @@ function tokenizeConditionExpression(expr: string): ExprToken[] {
       i = j;
       continue;
     }
-    if (ch === '%') {
-      let j = i + 1;
-      while (j < expr.length && /[01_]/.test(expr[j]!)) j++;
-      if (j === i + 1) throw new Error('Malformed binary literal in expression');
-      const value = parseInt(expr.slice(i + 1, j).replace(/_/g, ''), 2);
-      tokens.push({ type: 'number', value });
-      i = j;
-      continue;
-    }
     if (/[0-9]/.test(ch)) {
       let j = i + 1;
       while (j < expr.length && /[0-9]/.test(expr[j]!)) j++;
@@ -142,7 +142,14 @@ function resolveSymbolValue(name: string, ctx: ExpressionEvalContext): number | 
   if (lowered === 'true') return 1;
   if (lowered === 'false') return 0;
   if (ctx.consts.has(name)) return ctx.consts.get(name)!;
+  // Fallback to case-insensitive match to be tolerant of casing/whitespace issues
+  for (const [k, v] of ctx.consts) {
+    if (k.toLowerCase() === lowered) return v;
+  }
   if (ctx.labels.has(name)) return ctx.labels.get(name)!.addr;
+  for (const [k, v] of ctx.labels) {
+    if (k.toLowerCase() === lowered) return v.addr;
+  }
   if (name[0] === '@') {
     if (ctx.lineIndex <= 0) return null;
     const scopeKey = ctx.scopes[ctx.lineIndex - 1];
@@ -321,13 +328,15 @@ class ConditionExpressionParser {
         const rhs = this.parseUnary(allowEval);
         if (allowEval) {
           if (rhs === 0) throw new Error('Division by zero in expression');
-          value = value / rhs;
+            value = Math.trunc(value / rhs);
         }
       } else if (this.matchOperator('%')) {
         const rhs = this.parseUnary(allowEval);
         if (allowEval) {
           if (rhs === 0) throw new Error('Modulo by zero in expression');
-          value = value % rhs;
+          const lhsInt = Math.trunc(value);
+          const rhsInt = Math.trunc(rhs);
+          value = lhsInt % rhsInt;
         }
       } else {
         break;
@@ -417,8 +426,12 @@ class ConditionExpressionParser {
   }
 }
 
-export function evaluateConditionExpression(expr: string, ctx: ExpressionEvalContext, allowEval = true): number {
-  const tokens = tokenizeConditionExpression(expr);
-  const parser = new ConditionExpressionParser(tokens, ctx, expr);
+export function evaluateExpression(expr: string, ctx: ExpressionEvalContext, allowEval = true): number {
+  const normalized = expr.trim();
+  const tokens = tokenizeConditionExpression(normalized);
+  const parser = new ConditionExpressionParser(tokens, ctx, normalized);
   return parser.parseExpression(allowEval);
 }
+
+// Backcompat: keep old name as alias so existing callers continue to work.
+export const evaluateConditionExpression = evaluateExpression;
