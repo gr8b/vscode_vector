@@ -14,8 +14,64 @@ function tryGetWorkspaceRoot(): string | undefined {
 }
 
 export function stripMultilineComments(source: string): string {
-  // Remove /* */ style multiline comments
-  return source.replace(/\/\*[\s\S]*?\*\//g, '');
+  // Remove /* */ style multiline comments while respecting strings and character literals
+  let result = '';
+  let i = 0;
+  let inString = false;
+  let stringChar = '';
+  
+  while (i < source.length) {
+    const ch = source[i];
+    const next = i + 1 < source.length ? source[i + 1] : '';
+    const prev = i > 0 ? source[i - 1] : '';
+    
+    // Handle string and character literals (both " and ')
+    if ((ch === '"' || ch === '\'') && prev !== '\\') {
+      if (!inString) {
+        // Start of string or character literal
+        inString = true;
+        stringChar = ch;
+      } else if (ch === stringChar) {
+        // End of string or character literal
+        inString = false;
+        stringChar = '';
+      }
+      result += ch;
+      i++;
+      continue;
+    }
+    
+    // If we're inside a string or character literal, just copy the character
+    if (inString) {
+      result += ch;
+      i++;
+      continue;
+    }
+    
+    // Check for start of multiline comment
+    if (ch === '/' && next === '*') {
+      // Find the end of the comment
+      let j = i + 2;
+      while (j < source.length - 1) {
+        if (source[j] === '*' && source[j + 1] === '/') {
+          i = j + 2; // Skip past the closing */
+          break;
+        }
+        j++;
+      }
+      // If we didn't find a closing */, skip to end
+      if (j >= source.length - 1) {
+        i = source.length;
+      }
+      continue;
+    }
+    
+    // Regular character, just copy it
+    result += ch;
+    i++;
+  }
+  
+  return result;
 }
 
 export function stripInlineComment(line: string): string {

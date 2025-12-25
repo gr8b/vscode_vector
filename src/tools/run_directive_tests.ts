@@ -714,6 +714,29 @@ const tests: DirectiveTestCase[] = [
             bytes: [0x01, 0x02, 0x3E, 0x03, 0x06, 0x04, 0x05, 0x06],
             noWarnings: true
         }
+    },
+    {
+        name: 'Multiline comments respect string literals',
+        sourceFile: 'comment_multiline_strings.asm',
+        expect: {
+            // .text "This /* is not a comment */" = 27 bytes
+            // .text "Another string" = 14 bytes
+            // db 0x01, 0x02
+            // .text '*', '/' = 2 bytes
+            // db 0x03
+            bytes: [
+                0x54, 0x68, 0x69, 0x73, 0x20, 0x2F, 0x2A, 0x20,  // "This /* "
+                0x69, 0x73, 0x20, 0x6E, 0x6F, 0x74, 0x20, 0x61,  // "is not a"
+                0x20, 0x63, 0x6F, 0x6D, 0x6D, 0x65, 0x6E, 0x74,  // " comment"
+                0x20, 0x2A, 0x2F,                                // " */"
+                0x41, 0x6E, 0x6F, 0x74, 0x68, 0x65, 0x72, 0x20,  // "Another "
+                0x73, 0x74, 0x72, 0x69, 0x6E, 0x67,              // "string"
+                0x01, 0x02,                                      // db 0x01, 0x02
+                0x2A, 0x2F,                                      // '*', '/'
+                0x03                                             // db 0x03
+            ],
+            noWarnings: true
+        }
     }
 ];
 
