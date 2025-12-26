@@ -1,5 +1,5 @@
-import { ExpressionEvalContext } from './types';
-import {parseNumberFull} from './utils';
+import { ExpressionEvalContext, SourceOrigin } from './types';
+import { parseNumberFull, describeOrigin, formatMacroCallStack } from './utils';
 import { resolveLocalLabelKey } from './labels';
 import { evaluateExpression } from './expression';
 
@@ -25,13 +25,15 @@ export function ensureImmediateRange(
   operandLabel: string,
   opLabel: string,
   line: number,
-  errors: string[]
+  errors: string[],
+  origin?: SourceOrigin
 ): boolean {
   const max = bits === 8 ? 0xff : 0xffff;
   value = bits === 8 ? value & 0xff : value & 0xffff;
   if (value > max)
   {
-    errors.push(`${operandLabel} (${formatSignedHex(value)}) does not fit in ${bits}-bit operand for ${opLabel} at ${line}`);
+    const stack = formatMacroCallStack(origin);
+    errors.push(`${operandLabel} (${formatSignedHex(value)}) does not fit in ${bits}-bit operand for ${opLabel} at ${describeOrigin(origin, line)}${stack}`);
     return false;
   }
   return true;

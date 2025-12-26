@@ -348,6 +348,25 @@ export function describeOrigin(origin?: SourceOrigin, fallbackLine?: number, sou
   return `${file}:${line}`;
 }
 
+export function formatMacroCallStack(origin?: SourceOrigin): string {
+  const entries: Array<{ name: string; ordinal: number; file?: string; line?: number }> = [];
+  let frame = origin?.macroInstance;
+  while (frame) {
+    entries.push({ name: frame.name, ordinal: frame.ordinal, file: frame.callerFile, line: frame.callerLine });
+    frame = frame.callerMacro;
+  }
+  if (!entries.length) return '';
+
+  const lines = entries.reverse().map((e) => {
+    const file = e.file ? path.resolve(e.file) : '<memory>';
+    const line = e.line ?? 0;
+    const uri = e.file ? 'file:///' + path.resolve(e.file).replace(/\\/g, '/') + ':' + line : '';
+    return `${e.name}#${e.ordinal} at ${file}:${line}${uri ? ` (${uri})` : ''}`;
+  });
+
+  return '\nMacro call stack:\n  ' + lines.join('\n  ');
+}
+
 export function detectNormalLabelName(line: string): string | null {
   const stripped = stripInlineComment(line);
   const match = stripped.match(/^\s*([@A-Za-z_][A-Za-z0-9_@.]*)\s*:/);

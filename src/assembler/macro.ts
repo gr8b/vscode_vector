@@ -241,7 +241,8 @@ function instantiateMacroCall(
           name: call.definition.name,
           ordinal: call.ordinal,
           callerFile: origin.file,
-          callerLine: origin.line
+          callerLine: origin.line,
+          callerMacro: origin.macroInstance
         }
       }
     });

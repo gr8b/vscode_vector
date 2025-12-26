@@ -1,15 +1,18 @@
 import { Buffer } from 'buffer';
 
+export type MacroInstanceInfo = {
+  name: string;
+  ordinal: number;
+  callerFile?: string;
+  callerLine?: number;
+  callerMacro?: MacroInstanceInfo;
+};
+
 export type SourceOrigin = {
   file?: string;
   line: number;
   macroScope?: string;
-  macroInstance?: {
-    name: string;
-    ordinal: number;
-    callerFile?: string;
-    callerLine?: number;
-  };
+  macroInstance?: MacroInstanceInfo;
 };
 
 export type PrintMessage = {

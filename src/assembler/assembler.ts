@@ -796,7 +796,7 @@ export function assemble(
 
     // Instruction encoding
     if (INSTR_OPCODES.hasOwnProperty(op) === true) {
-      const emitted = instructionEncoding(tokens, srcLine, instrCtx, out);
+      const emitted = instructionEncoding(tokens, srcLine, origins[i], instrCtx, out);
       addr += emitted;
       continue;
     }
