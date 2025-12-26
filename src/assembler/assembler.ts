@@ -15,6 +15,7 @@ import {
 import { evaluateExpression } from './expression';
 import { prepareMacros, expandMacroInvocations } from './macro';
 import { expandLoopDirectives } from './loops';
+import { applyOptionalBlocks } from './optional';
 import { processIncludes } from './includes';
 import { registerLabel as registerLabelHelper, getScopeKey } from './labels';
 import { isAddressDirective, checkLabelOnDirective, tokenize } from './common';
@@ -69,8 +70,13 @@ export function assemble(
   if (loopExpanded.errors.length) {
     return { success: false, errors: loopExpanded.errors, origins: loopExpanded.origins };
   }
+  const optionalResult = applyOptionalBlocks(loopExpanded.lines, loopExpanded.origins);
+  if (optionalResult.errors.length) {
+    return { success: false, errors: optionalResult.errors, origins: optionalResult.origins };
+  }
 
-  const lines = loopExpanded.lines;
+  const lines = optionalResult.lines;
+  const origins = optionalResult.origins;
   const labels = new Map<string, { addr: number; line: number; src?: string }>();
   const consts = new Map<string, number>();
   const constOrigins = new Map<string, { line: number; src?: string }>();
@@ -96,8 +102,6 @@ export function assemble(
   const errors: string[] = [];
   const warnings: string[] = [];
   const printMessages: PrintMessage[] = [];
-  const origins = loopExpanded.origins;
-
   const ifStack: IfFrame[] = [];
 
   // Directive and data helpers share these contexts to mutate shared state
@@ -834,6 +838,7 @@ export function assemble(
     printMessages,
     origins };
 }
+
 
 // convenience when using from extension (no bound project file)
 export const assembleAndWrite = createAssembleAndWrite(assemble);

@@ -299,6 +299,23 @@ Step  = 4
 
 The example above emits `Value` three times (0, 1, 2) and leaves `Value` set to 3 for subsequent code.
 
+- `.optional` / `.endoptional` (short: `.opt` / `.endopt`): defines an optional code block that is automatically removed from output if none of its internal labels and constants are used externally. Example:
+
+```
+.optional
+useless_byte:
+  db 0       ; removed if useless_byte is never referenced
+.endoptional
+```
+```
+call useful_routine
+.opt
+useful_routine:
+  mvi a, 1 ; kept because useful_routine label was used
+  ret      ; kept because useful_routine label was used
+.endopt
+```
+
 - `.print`: emit compile-time diagnostics to the console during the second pass. Arguments are comma-separated and can mix string literals (`"PC="`), numeric literals, labels, or arbitrary expressions. Each argument is evaluated with the same expression engine as `.if`, so you can dump intermediate values or addresses while assembling:
 
 ```
