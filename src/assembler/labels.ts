@@ -70,6 +70,42 @@ export function getScopeKey(
   return key;
 }
 
+// Extract the macro scope portion from a scope key, if present
+export function extractMacroScope(scopeKey?: string): string | undefined {
+  if (!scopeKey) return undefined;
+  const parts = scopeKey.split('::');
+  return parts.length >= 3 ? parts.slice(2).join('::') : undefined;
+}
+
+// Build a unique name for a symbol that should be confined to a macro scope
+export function formatMacroScopedName(name: string, macroScope?: string): string {
+  return macroScope ? `${macroScope}::${name}` : name;
+}
+
+// Resolve a constant value while respecting macro scoping rules
+export function resolveScopedConst(
+  name: string,
+  consts: Map<string, number>,
+  scopeKey?: string,
+  macroScopeOverride?: string
+): number | undefined {
+  const macroScope = macroScopeOverride ?? extractMacroScope(scopeKey);
+  const scopedKey = macroScope ? formatMacroScopedName(name, macroScope) : undefined;
+
+  if (scopedKey && consts.has(scopedKey)) return consts.get(scopedKey);
+  if (consts.has(name)) return consts.get(name);
+
+  const targetLower = name.toLowerCase();
+  const scopedLower = scopedKey ? scopedKey.toLowerCase() : undefined;
+  for (const [k, v] of consts) {
+    const keyLower = k.toLowerCase();
+    if (keyLower === targetLower) return v;
+    if (scopedLower && keyLower === scopedLower) return v;
+  }
+
+  return undefined;
+}
+
 // Resolve the concrete key for a local label by picking the nearest definition
 // in the current scope: prefer the most recent definition at or before the
 // reference line; if none exists, fall back to the first definition after it.

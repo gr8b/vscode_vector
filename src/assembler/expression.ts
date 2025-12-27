@@ -1,5 +1,5 @@
 import { ExpressionEvalContext } from './types';
-import { resolveLocalLabelKey } from './labels';
+import { resolveLocalLabelKey, resolveScopedConst } from './labels';
 import { isIdentifierPart, isIdentifierStart } from './utils';
 
 type ExprToken =
@@ -142,11 +142,9 @@ function resolveSymbolValue(name: string, ctx: ExpressionEvalContext): number | 
   const lowered = name.toLowerCase();
   if (lowered === 'true') return 1;
   if (lowered === 'false') return 0;
-  if (ctx.consts.has(name)) return ctx.consts.get(name)!;
-  // Fallback to case-insensitive match to be tolerant of casing/whitespace issues
-  for (const [k, v] of ctx.consts) {
-    if (k.toLowerCase() === lowered) return v;
-  }
+  const scopeKey = ctx.lineIndex > 0 && ctx.lineIndex - 1 < ctx.scopes.length ? ctx.scopes[ctx.lineIndex - 1] : undefined;
+  const constVal = resolveScopedConst(name, ctx.consts, scopeKey, ctx.macroScope);
+  if (constVal !== undefined) return constVal;
   if (ctx.labels.has(name)) return ctx.labels.get(name)!.addr;
   for (const [k, v] of ctx.labels) {
     if (k.toLowerCase() === lowered) return v.addr;

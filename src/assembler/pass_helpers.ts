@@ -1,6 +1,7 @@
 import { evaluateExpression } from './expression';
 import { parseNumberFull } from './utils';
 import { ExpressionEvalContext, LocalLabelScopeIndex } from './types';
+import { extractMacroScope, resolveScopedConst } from './labels';
 
 type LabelMap = Map<string, { addr: number; line: number; src?: string }>;
 
@@ -13,12 +14,14 @@ export type AssemblyEvalState = {
 };
 
 function buildEvalContext(state: AssemblyEvalState, lineIndex: number): ExpressionEvalContext {
+  const scopeKey = lineIndex > 0 && lineIndex - 1 < state.scopes.length ? state.scopes[lineIndex - 1] : undefined;
   return {
     labels: state.labels,
     consts: state.consts,
     localsIndex: state.localsIndex,
     scopes: state.scopes,
     lineIndex,
+    macroScope: extractMacroScope(scopeKey),
     originLine: state.originLines ? state.originLines[lineIndex - 1] : undefined
   };
 }
@@ -48,7 +51,9 @@ export function processVariableAssignment(
 ): void {
   let val: number | null = parseNumberFull(rhs);
   if (val === null) {
-    if (state.consts.has(rhs)) val = state.consts.get(rhs)!;
+    const scopeKey = srcLine > 0 && srcLine - 1 < state.scopes.length ? state.scopes[srcLine - 1] : undefined;
+    const scopedConst = resolveScopedConst(rhs, state.consts, scopeKey);
+    if (scopedConst !== undefined) val = scopedConst;
     else if (state.labels.has(rhs)) val = state.labels.get(rhs)!.addr;
   }
 

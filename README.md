@@ -449,6 +449,8 @@ Alternative: `DB`
 
 Each macro call receives its own namespace for "normal" (`Label:`) and local (`@loop`) labels, so you can safely reuse throwaway labels inside macros or even call a macro recursively. Normal labels defined inside the macro are exported as `MacroName_<call-index>.Label`, letting you jump back into generated code for debugging tricks:
 
+Constants defined inside a macro are also scoped to that macro invocation. The assembler stores them under a per-call namespace, so a `C = 1` inside `MyMacro()` will not overwrite a global `C`, nor will it collide with `C` defined by other macro calls. Each invocation sees its own macro-local constants when evaluating expressions.
+
 ```
 .macro SetColors(Background=$06, Border=$0e, Addr)
   lda #Background

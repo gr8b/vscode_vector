@@ -17,7 +17,7 @@ import { prepareMacros, expandMacroInvocations } from './macro';
 import { expandLoopDirectives } from './loops';
 import { applyOptionalBlocks } from './optional';
 import { processIncludes } from './includes';
-import { registerLabel as registerLabelHelper, getScopeKey } from './labels';
+import { registerLabel as registerLabelHelper, getScopeKey, formatMacroScopedName, resolveScopedConst } from './labels';
 import { isAddressDirective, checkLabelOnDirective, tokenize } from './common';
 import { handleDB, handleDW, handleDD, handleStorage, DataContext } from './data';
 import {
@@ -150,15 +150,27 @@ export function assemble(
     return key;
   }
 
-  function tryEvaluateConstant(rhs: string, lineIndex: number): { value: number | null; error?: string } {
+  function tryEvaluateConstant(rhs: string, lineIndex: number, origin?: SourceOrigin): { value: number | null; error?: string } {
     let val: number | null = parseNumberFull(rhs);
     if (val === null) {
-      if (consts.has(rhs)) val = consts.get(rhs)!;
-      else if (labels.has(rhs)) val = labels.get(rhs)!.addr;
+      const scopeKey = lineIndex > 0 && lineIndex - 1 < scopes.length ? scopes[lineIndex - 1] : undefined;
+      const scoped = resolveScopedConst(rhs, consts, scopeKey, origin?.macroScope);
+      if (scoped !== undefined) {
+        val = scoped;
+      } else if (labels.has(rhs)) {
+        val = labels.get(rhs)!.addr;
+      }
     }
 
     if (val === null) {
-      const ctx: ExpressionEvalContext = { labels, consts, localsIndex, scopes, lineIndex };
+      const ctx: ExpressionEvalContext = {
+        labels,
+        consts,
+        localsIndex,
+        scopes,
+        lineIndex,
+        macroScope: origin?.macroScope
+      };
       try {
         val = evaluateExpression(rhs, ctx, true);
       } catch (err: any) {
@@ -175,7 +187,7 @@ export function assemble(
       madeProgress = false;
       for (let idx = pendingConsts.length - 1; idx >= 0; idx--) {
         const pending = pendingConsts[idx];
-        const result = tryEvaluateConstant(pending.rhs, pending.line);
+        const result = tryEvaluateConstant(pending.rhs, pending.line, pending.origin);
         if (result.value !== null) {
           consts.set(pending.name, result.value);
           constOrigins.set(pending.name, { line: pending.line, src: pending.origin?.file || sourcePath });
@@ -208,6 +220,10 @@ export function assemble(
   // Helper to create scope key
   function makeScopeKey(orig?: SourceOrigin): string {
     return getScopeKey(orig, sourcePath, directiveCounter);
+  }
+
+  function scopedConstName(name: string, origin: SourceOrigin | undefined): string {
+    return formatMacroScopedName(name, origin?.macroScope);
   }
 
 
@@ -331,7 +347,7 @@ export function assemble(
 
       const isLocal = rawName.startsWith('@');
       const scopeKey = scopes[i];
-      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : rawName;
+      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : scopedConstName(rawName, origins[i]);
 
       // Disallow reassignment for globals before attempting resolution
       if (!isLocal && consts.has(storeName) && !variables.has(storeName)) {
@@ -339,7 +355,7 @@ export function assemble(
         continue;
       }
 
-      const result = tryEvaluateConstant(rhs, i + 1);
+      const result = tryEvaluateConstant(rhs, i + 1, origins[i]);
       if (result.value !== null) {
         consts.set(storeName, result.value);
         constOrigins.set(storeName, { line: i + 1, src: origins[i]?.file || sourcePath });
@@ -358,7 +374,7 @@ export function assemble(
 
       const isLocal = rawName.startsWith('@');
       const scopeKey = scopes[i];
-      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : rawName;
+      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : scopedConstName(rawName, origins[i]);
 
       if (!isLocal && consts.has(storeName) && !variables.has(storeName)) {
         errors.push(`Cannot reassign constant '${rawName}' at ${i + 1} (use .var to create a variable instead)`);
@@ -366,7 +382,7 @@ export function assemble(
       }
 
       const rhs = assignMatch[2].trim();
-      const result = tryEvaluateConstant(rhs, i + 1);
+      const result = tryEvaluateConstant(rhs, i + 1, origins[i]);
       if (result.value !== null) {
         consts.set(storeName, result.value);
         constOrigins.set(storeName, { line: i + 1, src: origins[i]?.file || sourcePath });
@@ -385,7 +401,7 @@ export function assemble(
 
       const isLocal = rawName.startsWith('@');
       const scopeKey = scopes[i];
-      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : rawName;
+      const storeName = isLocal ? allocateLocalKey(rawName, origins[i], i + 1, scopeKey) : scopedConstName(rawName, origins[i]);
 
       if (!isLocal && consts.has(storeName) && !variables.has(storeName)) {
         errors.push(`Cannot reassign constant '${rawName}' at ${i + 1} (use .var to create a variable instead)`);
@@ -393,7 +409,7 @@ export function assemble(
       }
 
       const rhs = equMatch[2].trim();
-      const result = tryEvaluateConstant(rhs, i + 1);
+      const result = tryEvaluateConstant(rhs, i + 1, origins[i]);
       if (result.value !== null) {
         consts.set(storeName, result.value);
         constOrigins.set(storeName, { line: i + 1, src: origins[i]?.file || sourcePath });
@@ -757,6 +773,7 @@ export function assemble(
         lineIndex: srcLine,
         origins,
         sourcePath,
+        scopes,
         map
       });
       addr = result.addr;

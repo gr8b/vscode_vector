@@ -1,6 +1,6 @@
 import { ExpressionEvalContext, SourceOrigin } from './types';
 import { parseNumberFull, describeOrigin, formatMacroCallStack } from './utils';
-import { resolveLocalLabelKey } from './labels';
+import { resolveLocalLabelKey, resolveScopedConst } from './labels';
 import { evaluateExpression } from './expression';
 
 export type InstructionContext = {
@@ -48,6 +48,7 @@ export function resolveAddressToken(
 {
   if (!arg) return null;
   const s = arg.trim();
+  const scopeKey = lineIndex > 0 && lineIndex - 1 < ctx.scopes.length ? ctx.scopes[lineIndex - 1] : undefined;
   const exprCtx: ExpressionEvalContext = {
     labels: ctx.labels,
     consts: ctx.consts,
@@ -61,7 +62,8 @@ export function resolveAddressToken(
   if (num !== null) return num;
 
   // check simple named constants
-  if (ctx.consts && ctx.consts.has(s)) return ctx.consts.get(s)!;
+  const directConst = resolveScopedConst(s, ctx.consts, scopeKey);
+  if (directConst !== undefined) return directConst;
 
   // support chained arithmetic like "a + b - 1"
   const exprParts = s.split(/\s*([+-])\s*/);
@@ -82,8 +84,9 @@ export function resolveAddressToken(
           else val = null;
         } else if (ctx.labels.has(tok)) {
           val = ctx.labels.get(tok)!.addr;
-        } else if (ctx.consts && ctx.consts.has(tok)) {
-          val = ctx.consts.get(tok)!;
+        } else {
+          const scoped = resolveScopedConst(tok, ctx.consts, scopeKey);
+          if (scoped !== undefined) val = scoped;
         }
       }
 

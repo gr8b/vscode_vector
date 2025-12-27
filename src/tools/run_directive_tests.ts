@@ -325,11 +325,32 @@ const tests: DirectiveTestCase[] = [
         }
     },
     {
+        name: 'Macro local labels resolve per invocation',
+        sourceFile: 'macro_local_labels.asm',
+        expect: {
+            bytes: [0x01, 0xC3, 0x00, 0x00, 0x02, 0xC3, 0x04, 0x00],
+            labels: {
+                '@loop_0': 0x0000,
+                '@loop_1': 0x0004
+            }
+        }
+    },
+    {
         name: 'Loop mismatches are caught inside macro bodies',
         sourceFile: 'macro_loop_missing_endloop.asm',
         expect: {
             success: false,
             errorsContains: ['Missing .endloop']
+        }
+    },
+    {
+        name: 'Macro constants stay scoped per invocation',
+        sourceFile: 'macro_const_scope.asm',
+        expect: {
+            bytes: [0x01, 0x05, 0x09],
+            consts: {
+                C: 9
+            }
         }
     },
     {
