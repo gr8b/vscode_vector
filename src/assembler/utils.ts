@@ -489,3 +489,35 @@ export function resolveIncludePath(
   // Fall back to the last attempted path so the caller can include it in the error message.
   return attempted.length ? attempted[attempted.length - 1] : undefined;
 }
+
+export function parseDwordLiteral(v: string): WordLiteralResult {
+  const text = v.trim();
+  if (!text.length) return { error: 'Missing .dword value' };
+
+  const negativeMatch = /^-([0-9]+)$/.exec(text);
+  if (negativeMatch) {
+    const magnitude = parseInt(negativeMatch[1], 10);
+    if (isNaN(magnitude)) return { error: `Invalid negative .dword value '${text}'` };
+    if (magnitude > 0x7fffffff) return { error: `Negative .dword value '${text}' exceeds 31-bit limit` };
+    const value = (-magnitude) >>> 0;
+    return { value };
+  }
+
+  let parsed: number | null = null;
+  if (/^0x[0-9a-fA-F]+$/.test(text)) parsed = parseInt(text.slice(2), 16);
+  else if (/^\$[0-9a-fA-F]+$/.test(text)) parsed = parseInt(text.slice(1), 16);
+  else if (/^[0-9]+$/.test(text)) parsed = parseInt(text, 10);
+  else if (/^b[01_]+$/i.test(text)) parsed = parseInt(text.slice(1).replace(/_/g, ''), 2);
+  else if (/^%[01_]+$/i.test(text)) parsed = parseInt(text.slice(1).replace(/_/g, ''), 2);
+
+  if (parsed === null || isNaN(parsed)) {
+    return { error: `Invalid .dword value '${text}'` };
+  }
+  if (parsed < 0) {
+    return { error: `.dword value '${text}' cannot be negative (only decimal negatives allowed)` };
+  }
+  if (parsed > 0xffffffff) {
+    return { error: `.dword value '${text}' exceeds 32-bit range` };
+  }
+  return { value: parsed >>> 0 };
+}

@@ -29,9 +29,8 @@ export function ensureImmediateRange(
   origin?: SourceOrigin
 ): boolean {
   const max = bits === 8 ? 0xff : 0xffff;
-  value = bits === 8 ? value & 0xff : value & 0xffff;
-  if (value > max)
-  {
+  const min = bits === 8 ? -0x80 : -0x8000;
+  if (value < min || value > max) {
     const stack = formatMacroCallStack(origin);
     errors.push(`${operandLabel} (${formatSignedHex(value)}) does not fit in ${bits}-bit operand for ${opLabel} at ${describeOrigin(origin, line)}${stack}`);
     return false;

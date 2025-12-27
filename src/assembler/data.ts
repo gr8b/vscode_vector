@@ -2,6 +2,7 @@ import { ExpressionEvalContext, SourceOrigin } from './types';
 import {
   toByte,
   parseWordLiteral,
+  parseDwordLiteral,
   describeOrigin,
   splitTopLevelArgs
 } from './utils';
@@ -120,22 +121,66 @@ export function handleDW(
   return emitted;
 }
 
-export function handleDS(
+export function handleDD(
   line: string,
   tokens: string[],
   tokenOffsets: number[],
   srcLine: number,
-  ctx: DataContext
+  origin: SourceOrigin | undefined,
+  sourcePath: string | undefined,
+  ctx: DataContext,
+  out?: number[],
+  options: { defer?: boolean } = {}
 ): number {
+  const op = tokens[0].toUpperCase();
+  const originDesc = describeOrigin(origin, srcLine, sourcePath);
   const rest = argsAfterToken(line, tokens[0], tokenOffsets[0]).trim();
-  const n = parseInt(rest);
 
-  if (isNaN(n) || n < 0) {
-    ctx.errors.push(`Bad DS count '${rest}' at ${srcLine}`);
+  if (!rest.length) {
+    ctx.errors.push(`Missing value for ${op} at ${originDesc}`);
     return 0;
   }
 
-  return n;
+  const parts = rest.split(',').map(p => p.trim()).filter(p => p.length > 0);
+  if (!parts.length) {
+    ctx.errors.push(`Missing value for ${op} at ${originDesc}`);
+    return 0;
+  }
+
+  let emitted = 0;
+  for (const part of parts) {
+    let value: number | null = null;
+    const parsed = parseDwordLiteral(part);
+
+    if ('error' in parsed) {
+      if (!options.defer) {
+        const exprCtx: ExpressionEvalContext = {
+          labels: ctx.labels,
+          consts: ctx.consts,
+          localsIndex: ctx.localsIndex,
+          scopes: ctx.scopes,
+          lineIndex: srcLine
+        };
+        try {
+          value = evaluateExpression(part, exprCtx, true) >>> 0;
+        } catch (err: any) {
+          ctx.errors.push(`Bad ${op} value '${part}' at ${originDesc}: ${err?.message || err}`);
+        }
+      }
+    } else {
+      value = parsed.value >>> 0;
+    }
+
+    if (out && value !== null) {
+      out.push(value & 0xff);
+      out.push((value >>> 8) & 0xff);
+      out.push((value >>> 16) & 0xff);
+      out.push((value >>> 24) & 0xff);
+    }
+    emitted += 4;
+  }
+
+  return emitted;
 }
 
 export function handleStorage(

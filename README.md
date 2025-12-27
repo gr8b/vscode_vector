@@ -401,7 +401,7 @@ db Counter              ; Emits: 0x05
 .org 0x200
 buffer:   .storage 16          ; advances PC by 16, writes nothing
 table:    .storage 4, 0x7E     ; emits 0x7E 0x7E 0x7E 0x7E
-after:    db 0xAA              ; assembled after the reserved space
+after:    .db 0xAA              ; assembled after the reserved space
 ```
 
 ```
@@ -424,6 +424,16 @@ AlignedLabel:
 The snippet above outputs `34 12 2A 00 0F 00 FB FF`.
 
 Alternative: `DW`
+
+- `.dword value[, values...]`: emit one or more 32-bit words at the current address. Values accept the same literal forms as `.word` plus expressions. Negative decimal literals are allowed down to -0x7FFFFFFF (31-bit magnitude) and are encoded using two's complement. Each value is written little-endian (lowest byte first). Example:
+
+```
+.dword $12345678, CONST_BASE + 0x22, -1
+```
+
+The snippet above outputs `78 56 34 12 22 00 00 01 FF FF FF FF`.
+
+Alternative: `DD`
 
 - `.byte value[, values...]`: emit one or more bytes at the current address. Accepts decimal, hex (`0x`/`$`), or binary (`b`/`%`). Example:
 

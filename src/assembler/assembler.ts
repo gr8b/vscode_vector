@@ -19,7 +19,7 @@ import { applyOptionalBlocks } from './optional';
 import { processIncludes } from './includes';
 import { registerLabel as registerLabelHelper, getScopeKey } from './labels';
 import { isAddressDirective, checkLabelOnDirective, tokenize } from './common';
-import { handleDB, handleDW, handleDS, handleStorage, DataContext } from './data';
+import { handleDB, handleDW, handleDD, handleStorage, DataContext } from './data';
 import {
   handleIfDirective,
   handleEndifDirective,
@@ -435,12 +435,12 @@ export function assemble(
       continue;
     }
 
-    if (op === 'DS') {
-      addr += handleDS(line, tokens, tokenOffsets, i + 1, dataCtx);
+    if (op === 'DD' || op === '.DWORD') {
+      addr += handleDD(line, tokens, tokenOffsets, i + 1, origins[i], sourcePath, dataCtx, undefined, { defer: true });
       continue;
     }
 
-    if (op === '.STORAGE' || op === 'STORAGE') {
+    if (op === '.STORAGE' || op === '.DS') {
       const { size } = handleStorage(line, tokens, tokenOffsets, i + 1, origins[i], sourcePath, dataCtx);
       addr += size;
       continue;
@@ -727,13 +727,16 @@ export function assemble(
       continue;
     }
 
-    if (op === 'DS') {
-      const emitted = handleDS(line, tokens, tokenOffsets, srcLine, dataCtxSecond);
+    if (op === 'DD' || op === '.DWORD') {
+      const emitted = handleDD(line, tokens, tokenOffsets, srcLine, origins[i], sourcePath, dataCtxSecond, out);
+      if (emitted > 0) {
+        dataLineSpans[i] = { start: lineStartAddr, byteLength: emitted, unitBytes: 4 };
+      }
       addr += emitted;
       continue;
     }
 
-    if (op === '.STORAGE' || op === 'STORAGE') {
+    if (op === '.STORAGE' || op === '.DS') {
       const { size, filled } = handleStorage(line, tokens, tokenOffsets, srcLine, origins[i], sourcePath, dataCtxSecond, out);
       if (filled && size > 0) {
         dataLineSpans[i] = { start: lineStartAddr, byteLength: size, unitBytes: 1 };
