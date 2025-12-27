@@ -12,6 +12,7 @@ import {
 import { evaluateExpression } from './expression';
 import { formatMacroCallStack } from './utils';
 import { argsAfterToken } from './common';
+import { extractMacroScope } from './labels';
 
 export type DirectiveContext = {
   labels: Map<string, { addr: number; line: number; src?: string }>;
@@ -24,6 +25,9 @@ export type DirectiveContext = {
   textCase: TextCaseType;
   localsIndex: Map<string, Map<string, Array<{ key: string; line: number }>>>;
   scopes: string[];
+  // Hints for macro/local resolution on the current line
+  currentMacroScope?: string;
+  currentOriginLine?: number;
   // Optional address of the current line for location-counter expressions
   locationCounter?: number;
 };
@@ -49,13 +53,16 @@ export function handleIfDirective(
     return true;
   }
 
+  const scopeEntry = lineIndex > 0 && lineIndex - 1 < ctx.scopes.length ? ctx.scopes[lineIndex - 1] : undefined;
   const exprCtx: ExpressionEvalContext = {
     labels: ctx.labels,
     consts: ctx.consts,
     localsIndex: ctx.localsIndex,
     scopes: ctx.scopes,
     lineIndex,
-    locationCounter: ctx.locationCounter
+    locationCounter: ctx.locationCounter,
+    macroScope: origin?.macroScope ?? extractMacroScope(scopeEntry) ?? ctx.currentMacroScope,
+    originLine: origin?.line ?? ctx.currentOriginLine ?? lineIndex
   };
 
   let conditionResult = false;
@@ -120,13 +127,16 @@ export function handlePrintDirective(
   const argsText = (printMatch[1] || '').trim();
   const parts = argsText.length ? splitTopLevelArgs(argsText) : [];
   const fragments: string[] = [];
+  const scopeEntry = lineIndex > 0 && lineIndex - 1 < ctx.scopes.length ? ctx.scopes[lineIndex - 1] : undefined;
   const exprCtx: ExpressionEvalContext = {
     labels: ctx.labels,
     consts: ctx.consts,
     localsIndex: ctx.localsIndex,
     scopes: ctx.scopes,
     lineIndex,
-    locationCounter: ctx.locationCounter
+    locationCounter: ctx.locationCounter,
+    macroScope: origin?.macroScope ?? extractMacroScope(scopeEntry) ?? ctx.currentMacroScope,
+    originLine: origin?.line ?? ctx.currentOriginLine ?? lineIndex
   };
 
   let failed = false;
@@ -184,13 +194,16 @@ export function handleErrorDirective(
   const argsText = (errorMatch[1] || '').trim();
   const parts = argsText.length ? splitTopLevelArgs(argsText) : [];
   const fragments: string[] = [];
+  const scopeEntry = lineIndex > 0 && lineIndex - 1 < ctx.scopes.length ? ctx.scopes[lineIndex - 1] : undefined;
   const exprCtx: ExpressionEvalContext = {
     labels: ctx.labels,
     consts: ctx.consts,
     localsIndex: ctx.localsIndex,
     scopes: ctx.scopes,
     lineIndex,
-    locationCounter: ctx.locationCounter
+    locationCounter: ctx.locationCounter,
+    macroScope: origin?.macroScope ?? extractMacroScope(scopeEntry) ?? ctx.currentMacroScope,
+    originLine: origin?.line ?? ctx.currentOriginLine ?? lineIndex
   };
 
   let failed = false;

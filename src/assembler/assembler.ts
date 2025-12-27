@@ -244,6 +244,8 @@ export function assemble(
     directiveCtx.locationCounter = addr;
     dataCtx.locationCounter = addr;
     incbinCtx.locationCounter = addr;
+    directiveCtx.currentMacroScope = origins[i]?.macroScope;
+    directiveCtx.currentOriginLine = origins[i]?.line;
 
     // Update directive counter and scope key when file changes
     if (i > 0) {
@@ -592,6 +594,8 @@ export function assemble(
     dataCtxSecond.locationCounter = addr;
     incbinCtxSecond.locationCounter = addr;
     instrCtx.locationCounter = addr;
+    directiveCtxSecond.currentMacroScope = origins[i]?.macroScope;
+    directiveCtxSecond.currentOriginLine = origins[i]?.line;
 
     const originDesc = describeOrigin(origins[i], srcLine, sourcePath);
 
@@ -645,7 +649,9 @@ export function assemble(
         localsIndex,
         scopes,
         lineIndex: srcLine,
-        locationCounter: addr
+        locationCounter: addr,
+        macroScope: origins[i]?.macroScope,
+        originLine: origins[i]?.line
       };
       let conditionResult = false;
       if (!parentActive) {

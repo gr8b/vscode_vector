@@ -261,7 +261,8 @@ function substituteMacroParams(source: string, replacements: Record<string, stri
       if (prefix) {
         return `${prefix}(${trimmed})`;
       }
-      return trimmed;
+      const needsWrap = /[+\-*/%&|^<>\s]/.test(trimmed) && !(trimmed.startsWith('(') && trimmed.endsWith(')'));
+      return needsWrap ? `(${trimmed})` : trimmed;
     });
   }
   return output;
